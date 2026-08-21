@@ -1,0 +1,53 @@
+<div class="app">
+  <!-- Sidebar (espelha base.html) -->
+  <aside class="sidebar" id="sidebar" [class.collapsed]="sidebarCollapsed">
+    <button class="sidebar-collapse-btn" title="Minimizar/expandir sidebar" (click)="toggleSidebar()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 18l-6-6 6-6"/>
+      </svg>
+    </button>
+    <div class="sidebar-header">
+      <div class="sidebar-brand">
+        <div class="brand-icon">🛡️</div>
+        <div>
+          <div class="brand-name">Multi-Agentes Auditoria</div>
+          <div class="brand-sub">Auditoria multiagente</div>
+        </div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <span class="nav-section-label">Navegação</span>
+      <a routerLink="/chat" routerLinkActive="active" class="nav-item">
+        <span class="nav-icon">💬</span>
+        <span>Chat</span>
+      </a>
+      <a routerLink="/playbooks" routerLinkActive="active" class="nav-item">
+        <span class="nav-icon">📐</span>
+        <span>Playbooks</span>
+      </a>
+      <!-- Manual ainda não migrado; fica desabilitado por ora. -->
+      <a class="nav-item is-disabled" title="Em migração">
+        <span class="nav-icon">📖</span>
+        <span>Manual</span>
+      </a>
+      <a routerLink="/settings" routerLinkActive="active" class="nav-item">
+        <span class="nav-icon">⚙️</span>
+        <span>Configurações</span>
+      </a>
+    </nav>
+
+    <app-history-list></app-history-list>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-info">
+        <span class="info-dot"></span>
+        <span>Multiagente ativo</span>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <router-outlet></router-outlet>
+  </main>
+</div>

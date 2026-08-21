@@ -1,0 +1,61 @@
+<div class="tool-call" [class.has-error]="hasError" [class.open]="open">
+  <div class="tool-call-header" (click)="toggle()">
+    <span class="tool-call-icon">{{ icon }}</span>
+    <code class="tool-call-name">{{ tc.tool }}()</code>
+    <span class="tool-call-status">
+      <span class="status-dot" [class.error]="hasError" [class.ok]="!hasError"></span>
+      {{ hasError ? 'erro' : 'executado' }}{{ durationStr }}
+    </span>
+    <svg class="tool-call-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <polyline points="6 9 12 15 18 9"/>
+    </svg>
+  </div>
+  <div class="tool-call-body">
+    <!-- Argumentos que são código/documento: bloco estilo editor (IDE) -->
+    <div class="tool-call-row" *ngFor="let b of codeBlocks">
+      <span class="tool-call-label">{{ b.key }}</span>
+      <div class="code-block" [class.expanded]="b.expanded">
+        <div class="code-block-bar">
+          <span class="code-block-lang">{{ b.lang }}</span>
+          <span class="code-block-actions">
+            <button class="code-block-copy" type="button" (click)="toggleExpand(b, $event)"
+                    [title]="b.expanded ? 'Recolher' : 'Expandir'">
+              {{ b.expanded ? '⤡ Recolher' : '⤢ Expandir' }}
+            </button>
+            <button class="code-block-copy" type="button" (click)="copyCode(b, $event)"
+                    [title]="b.copied ? 'Copiado!' : 'Copiar código'">
+              <span *ngIf="!b.copied">📋 Copiar</span>
+              <span *ngIf="b.copied">✓ Copiado</span>
+            </button>
+          </span>
+        </div>
+        <pre class="code-block-pre"><code class="hljs" [innerHTML]="b.html"></code></pre>
+      </div>
+    </div>
+
+    <div class="tool-call-row" *ngIf="otherArgs.length">
+      <span class="tool-call-label">argumentos</span>
+      <div class="tool-call-value">
+        <ng-container *ngFor="let a of otherArgs; let last = last">
+          <span class="tool-arg-key">{{ a.key }}</span>: <span class="tool-arg-val">{{ a.val }}</span><span *ngIf="!last"> · </span>
+        </ng-container>
+      </div>
+    </div>
+    <div class="tool-call-row" *ngIf="!hasArgs">
+      <span class="tool-call-label">argumentos</span>
+      <div class="tool-call-value"><em>sem argumentos</em></div>
+    </div>
+
+    <!-- Retorno / erro -->
+    <div class="tool-call-row">
+      <span class="tool-call-label">{{ hasError ? 'erro' : 'retorno' }}</span>
+      <pre class="tool-call-value mono">{{ prettyResult }}</pre>
+    </div>
+
+    <!-- Tools do sub-agente (recursivo) -->
+    <div class="tool-call-nested-wrap" *ngIf="nested.length" (click)="$event.stopPropagation()">
+      <span class="tool-call-nested-label">🔽 Tools do sub-agente</span>
+      <app-tool-call *ngFor="let ntc of nested" [tc]="ntc"></app-tool-call>
+    </div>
+  </div>
+</div>

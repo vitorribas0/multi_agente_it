@@ -1,0 +1,221 @@
+<div class="content-page">
+  <div class="page-header">
+    <h1>Configurações</h1>
+    <p class="page-subtitle">Personalize agentes, modelos, prompts e tools</p>
+  </div>
+
+  <div class="config-tabs">
+    <button class="config-tab" [class.active]="activeTab === 'general'" (click)="setTab('general')">⚙️ Geral</button>
+    <button class="config-tab" [class.active]="activeTab === 'agents'" (click)="setTab('agents')">🤖 Agentes</button>
+    <button class="config-tab" [class.active]="activeTab === 'knowledge'" (click)="setTab('knowledge')">📚 Conhecimentos</button>
+    <button class="config-tab" [class.active]="activeTab === 'tools'" (click)="setTab('tools')">⚡ Tools</button>
+  </div>
+
+  <!-- ── Geral ────────────────────────────────────────────────── -->
+  <div class="config-panel" [class.active]="activeTab === 'general'">
+    <div class="config-loading" *ngIf="loading">Carregando configurações…</div>
+
+    <div class="agent-card" *ngIf="!loading">
+      <div class="agent-card-header">
+        <div class="agent-card-icon">🔁</div>
+        <div class="agent-card-title">
+          <h3>Limite de interações</h3>
+          <p>Nº máximo de passos com ferramentas que um agente pode dar em um único turno antes de ser forçado a concluir.</p>
+        </div>
+      </div>
+      <div class="agent-card-body">
+        <div class="form-group">
+          <label for="max-iterations">Interações por turno</label>
+          <input type="number" class="form-select" id="max-iterations" min="1" max="100" step="1"
+                 [(ngModel)]="maxIterations">
+          <div class="range-hint"><span>mín. 1</span><span>padrão 18</span><span>máx. 100</span></div>
+        </div>
+        <div class="agent-actions">
+          <button class="btn btn-primary" [disabled]="savingGeneral" (click)="saveGeneral()">💾 Salvar</button>
+          <span class="save-status" [ngClass]="generalStatus.kind">{{ generalStatus.text }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="agent-card" *ngIf="!loading" style="margin-top:16px;">
+      <div class="agent-card-header">
+        <div class="agent-card-icon">🚀</div>
+        <div class="agent-card-title">
+          <h3>Paralelismo da análise massiva</h3>
+          <p>Quantas linhas a análise massiva por IA processa ao mesmo tempo. Cada worker faz 1 chamada de LLM simultânea — mais workers aceleram, mas aumentam o risco de rate limit e concentram custo.</p>
+        </div>
+      </div>
+      <div class="agent-card-body">
+        <div class="form-group">
+          <label for="massiva-workers">Linhas em paralelo (workers)</label>
+          <input type="number" class="form-select" id="massiva-workers" min="1" max="10" step="1"
+                 [class.is-danger]="massivaWorkers >= 10"
+                 [(ngModel)]="massivaWorkers" (ngModelChange)="clampMassiva()">
+          <div class="range-hint"><span>mín. 1</span><span>padrão 5</span><span>máx. 10 ⚠️</span></div>
+        </div>
+        <div class="massiva-warn" *ngIf="massivaWarn as w" [ngClass]="w.cls">
+          <span class="mw-ico">{{ w.ico }}</span><span>{{ w.msg }}</span>
+        </div>
+        <div class="agent-actions">
+          <button class="btn btn-primary" [disabled]="savingMassiva" (click)="saveMassiva()">💾 Salvar</button>
+          <span class="save-status" [ngClass]="massivaStatus.kind">{{ massivaStatus.text }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Agentes ──────────────────────────────────────────────── -->
+  <div class="config-panel" [class.active]="activeTab === 'agents'">
+    <div class="config-loading" *ngIf="loading">Carregando agentes…</div>
+
+    <div *ngIf="!loading">
+      <div class="agent-card" *ngFor="let agent of agents; trackBy: trackAgent" [attr.data-slug]="agent.slug">
+        <div class="agent-card-header">
+          <div class="agent-card-icon">{{ agent.icon }}</div>
+          <div class="agent-card-title">
+            <h3>{{ agent.name }} <span class="badge-default" *ngIf="agent.is_default">padrão</span></h3>
+            <p>{{ agent.description }}</p>
+          </div>
+        </div>
+
+        <div class="agent-card-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Modelo</label>
+              <select class="form-select" [(ngModel)]="agent.model">
+                <option *ngFor="let m of models" [value]="m">{{ m }}</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Temperatura: <span class="temp-display">{{ agent.temperature }}</span></label>
+              <input type="range" class="form-range" min="0" max="2" step="0.1" [(ngModel)]="agent.temperature">
+              <div class="range-hint"><span>preciso</span><span>balanceado</span><span>criativo</span></div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>System Prompt</label>
+            <textarea class="form-textarea" rows="10" [(ngModel)]="agent.system_prompt"></textarea>
+          </div>
+
+          <div class="form-group tools-group">
+            <div class="tools-head">
+              <label>Tools habilitadas</label>
+              <div class="tools-head-actions">
+                <span class="tools-counter"><b>{{ toolsOnCount(agent) }}</b> de {{ tools.length }} ativas</span>
+                <button type="button" class="tools-bulk" (click)="bulkTools(agent, true)">marcar todas</button>
+                <button type="button" class="tools-bulk" (click)="bulkTools(agent, false)">limpar</button>
+              </div>
+            </div>
+            <div class="tools-grid">
+              <label class="tool-check" *ngFor="let t of tools; trackBy: trackTool"
+                     [class.is-on]="isToolOn(agent, t.slug)">
+                <input type="checkbox" [checked]="isToolOn(agent, t.slug)" (change)="toggleTool(agent, t.slug)">
+                <span class="tool-check-icon">{{ t.icon }}</span>
+                <span class="tool-check-name">{{ t.name }}</span>
+                <span class="tool-check-mark" aria-hidden="true"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="agent-actions">
+            <button class="btn btn-primary" [disabled]="agent._saving" (click)="saveAgent(agent)">💾 Salvar</button>
+            <span class="save-status" [ngClass]="agent._status.kind">{{ agent._status.text }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Conhecimentos ────────────────────────────────────────── -->
+  <div class="config-panel" [class.active]="activeTab === 'knowledge'">
+    <div class="knowledge-intro">
+      <p class="config-info">
+        Conhecimentos são prompts de especialista/processo reutilizáveis. No chat,
+        você ativa um ou mais e o conteúdo é injetado no contexto do orquestrador.
+      </p>
+      <button class="btn btn-primary" (click)="addKnowledgeCard()">＋ Novo conhecimento</button>
+    </div>
+
+    <div class="config-loading" *ngIf="knowledgeLoading">Carregando conhecimentos…</div>
+
+    <div *ngIf="!knowledgeLoading">
+      <p class="config-info" *ngIf="!knowledgeCards.length">
+        Nenhum conhecimento cadastrado ainda. Clique em <b>＋ Novo conhecimento</b> para criar o primeiro.
+      </p>
+
+      <div class="agent-card knowledge-card" *ngFor="let card of knowledgeCards; trackBy: trackKnowledge"
+           [attr.data-id]="card.id">
+        <div class="agent-card-header">
+          <div class="agent-card-icon">{{ card.icon || '📚' }}</div>
+          <div class="agent-card-title">
+            <h3>{{ card.id === null ? 'Novo conhecimento' : card.name }}</h3>
+            <p>{{ card.id === null ? 'Preencha os campos e salve.' : card.description }}</p>
+          </div>
+        </div>
+        <div class="agent-card-body">
+          <div class="form-grid">
+            <div class="form-group form-group-icon">
+              <label>Ícone</label>
+              <input type="text" class="form-select" maxlength="4" [(ngModel)]="card.icon">
+            </div>
+            <div class="form-group">
+              <label>Nome</label>
+              <input type="text" class="form-select" maxlength="120"
+                     placeholder="Ex.: Especialista em Fraude de Cartão" [(ngModel)]="card.name">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Descrição curta</label>
+            <input type="text" class="form-select" maxlength="240"
+                   placeholder="Resumo de 1 linha (aparece no chat)" [(ngModel)]="card.description">
+          </div>
+          <div class="form-group">
+            <label>Prompt do conhecimento</label>
+            <textarea class="form-textarea" rows="12"
+                      placeholder="Escreva aqui o prompt completo: contexto de especialista, processo, bases de análise, instruções…"
+                      [(ngModel)]="card.prompt"></textarea>
+          </div>
+          <div class="agent-actions">
+            <button class="btn btn-primary" [disabled]="card._saving" (click)="saveKnowledge(card)">💾 Salvar</button>
+            <button class="btn btn-danger" (click)="deleteKnowledge(card)">🗑️ Excluir</button>
+            <span class="save-status" [ngClass]="card._status.kind">{{ card._status.text }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Tools ────────────────────────────────────────────────── -->
+  <div class="config-panel" [class.active]="activeTab === 'tools'">
+    <div class="config-loading" *ngIf="loading">Carregando tools…</div>
+
+    <div *ngIf="!loading">
+      <p class="config-info">{{ tools.length }} tools registradas via decorator <code>&#64;tool</code> em <code>tools/</code>.</p>
+
+      <div class="tool-info-card" *ngFor="let t of tools; trackBy: trackTool">
+        <div class="tool-info-header">
+          <span class="tool-info-icon">{{ t.icon }}</span>
+          <code class="tool-info-slug">{{ t.slug }}</code>
+          <div class="tool-info-flags">
+            <span class="tool-flag-tag hil" *ngIf="t.is_human_in_loop">human-in-loop</span>
+            <span class="tool-flag-tag session" *ngIf="t.uses_session">usa sessão</span>
+          </div>
+        </div>
+        <p class="tool-info-desc">{{ t.description }}</p>
+        <div class="tool-info-params">
+          <span class="tool-info-label">Parâmetros</span>
+          <ul>
+            <li *ngIf="!paramEntries(t).length"><em>sem parâmetros</em></li>
+            <li *ngFor="let p of paramEntries(t)">
+              <code>{{ p.key }}</code>
+              <span class="param-type">{{ p.type }}</span>
+              <span class="param-req" *ngIf="p.required">obrigatório</span>
+              <span class="param-opt" *ngIf="!p.required">opcional</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

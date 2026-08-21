@@ -1,0 +1,53 @@
+<!-- Backdrop só no modo expandido; clicar fecha (igual ao chat.js). -->
+<div class="table-card-backdrop" *ngIf="expanded" (click)="minimize()"></div>
+
+<div class="table-card" [class.expanded]="expanded">
+  <div class="table-card-header">
+    <span class="table-card-icon">📊</span>
+    <div class="table-card-meta">
+      <div class="table-card-title">{{ att.filename || 'tabela' }}</div>
+      <div class="table-card-sub">
+        {{ total.toLocaleString('pt-BR') }} linhas · {{ columns.length }} colunas<span *ngIf="att.truncated"> · truncado</span>
+      </div>
+    </div>
+    <button class="table-card-btn" (click)="toggle()" [title]="expanded ? 'Minimizar tabela' : 'Expandir tabela'">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+        <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+      </svg>
+      <span>{{ expanded ? 'Minimizar' : 'Expandir' }}</span>
+    </button>
+  </div>
+
+  <div class="table-card-viewport">
+    <table class="table-grid">
+      <thead>
+        <tr>
+          <th *ngFor="let c of columns">
+            <span class="th-name">{{ c }}</span>
+            <span class="th-type" *ngIf="dtypes[c]">{{ dtypes[c] }}</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngIf="!visibleRows.length">
+          <td [attr.colspan]="columns.length || 1" class="td-empty">sem dados</td>
+        </tr>
+        <tr *ngFor="let r of visibleRows">
+          <td *ngFor="let c of columns">
+            <span class="td-null" *ngIf="isNull(cell(r, c))">∅</span>
+            <ng-container *ngIf="!isNull(cell(r, c))">{{ cell(r, c) }}</ng-container>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="table-card-footer">
+    <span class="table-pager-info">{{ pagerInfo }}</span>
+    <div class="table-pager-actions">
+      <button class="table-pager-btn" [disabled]="prevDisabled" (click)="prev()">← Anterior</button>
+      <button class="table-pager-btn" [disabled]="nextDisabled" (click)="next()">Próximo →</button>
+    </div>
+  </div>
+</div>

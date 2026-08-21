@@ -1,0 +1,39 @@
+<div class="table-card-backdrop" *ngIf="expanded" (click)="toggle()"></div>
+
+<div class="mermaid-card" [class.expanded]="expanded">
+  <div class="mermaid-card-header">
+    <span class="mermaid-card-icon">🗺️</span>
+    <div class="mermaid-card-meta">
+      <div class="mermaid-card-title">{{ titulo }}</div>
+      <div class="mermaid-card-sub">Fluxograma · {{ linhas }} linha{{ linhas === 1 ? '' : 's' }}</div>
+    </div>
+    <div class="mermaid-card-actions">
+      <button class="mermaid-card-btn" (click)="downloadPng()" title="Baixar PNG">PNG</button>
+      <button class="mermaid-card-btn" (click)="downloadSvg()" title="Baixar SVG">SVG</button>
+      <button class="mermaid-card-btn" (click)="downloadMmd()" title="Baixar código Mermaid (.mmd)">.mmd</button>
+      <button class="mermaid-card-btn primary" (click)="toggle()" [title]="expanded ? 'Minimizar' : 'Expandir'">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+          <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+        </svg>
+        <span>{{ expanded ? 'Minimizar' : 'Expandir' }}</span>
+      </button>
+    </div>
+  </div>
+  <div class="mermaid-card-viewport" #viewport
+       (wheel)="onWheel($event)"
+       (pointerdown)="onPointerDown($event)"
+       (pointermove)="onPointerMove($event)"
+       (pointerup)="onPointerUp($event)"
+       (pointercancel)="onPointerUp($event)"
+       (dblclick)="fitToView()">
+    <div class="mermaid-stage" #stage><div class="mermaid-render" #renderTarget></div></div>
+    <div class="mermaid-zoom-controls">
+      <button class="mermaid-zoom-btn" (click)="zoomCentered(1 / 1.25)" title="Diminuir">−</button>
+      <span class="mermaid-zoom-level" title="Zoom atual">{{ zoomPct }}%</span>
+      <button class="mermaid-zoom-btn" (click)="zoomCentered(1.25)" title="Aumentar">+</button>
+      <button class="mermaid-zoom-btn" (click)="fitToView()" title="Ajustar à tela">⤢</button>
+    </div>
+    <div class="mermaid-zoom-hint">Scroll para zoom · arraste para mover</div>
+  </div>
+</div>

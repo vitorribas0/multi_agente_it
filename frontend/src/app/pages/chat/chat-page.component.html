@@ -1,0 +1,328 @@
+<div class="chat-container">
+  <header class="chat-header">
+    <span class="chat-header-title">Multi-Agentes Auditoria</span>
+    <div class="header-controls">
+      <div class="files-wrap">
+        <button class="conversation-files-btn" type="button"
+                [class.has-files]="conversationFiles.length"
+                (click)="toggleFilesMenu()"
+                [attr.aria-expanded]="filesMenuOpen"
+                title="Arquivos anexados nesta conversa">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+          </svg>
+          <span class="conversation-files-label">Arquivos</span>
+          <span class="conversation-files-count">{{ conversationFiles.length }}</span>
+        </button>
+
+        <div class="conversation-files-menu" *ngIf="filesMenuOpen">
+          <div class="conversation-files-heading">
+            <div>
+              <strong>Arquivos da conversa</strong>
+              <small>Contexto disponível para os agentes</small>
+            </div>
+            <button type="button" class="conversation-files-close" (click)="filesMenuOpen = false" title="Fechar">×</button>
+          </div>
+
+          <div class="conversation-files-list" *ngIf="conversationFiles.length; else noConversationFiles">
+            <div class="conversation-file" *ngFor="let file of conversationFiles">
+              <span class="conversation-file-icon">{{ fileIcon(file.kind) }}</span>
+              <span class="conversation-file-copy">
+                <strong [title]="file.filename">{{ file.filename }}</strong>
+                <small>{{ file.meta }}</small>
+              </span>
+              <span class="conversation-file-status" title="Disponível na sessão">✓</span>
+            </div>
+          </div>
+
+          <ng-template #noConversationFiles>
+            <div class="conversation-files-empty">
+              <span>📎</span>
+              <p>Nenhum arquivo anexado nesta conversa.</p>
+              <small>Use o botão de clipe ao lado da caixa de mensagem.</small>
+            </div>
+          </ng-template>
+        </div>
+      </div>
+
+      <select id="agent-picker" class="agent-picker" [(ngModel)]="selectedAgentSlug">
+        <option *ngFor="let a of agents" [value]="a.slug">{{ a.icon }} {{ a.name }}</option>
+      </select>
+      <div class="model-badge" id="agent-badge">
+        <span class="dot"></span>
+        <span *ngIf="selectedAgent as a">{{ a.icon }} {{ a.name }}</span>
+        <span *ngIf="!selectedAgent">Multiagente</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="messages-area" #messagesArea>
+    <!-- Estado de boas-vindas (some ao ter mensagens) -->
+    <div class="welcome-state" *ngIf="!hasMessages">
+      <div class="welcome-icon">{{ activePlaybook ? activePlaybook.icon : '🛡️' }}</div>
+      <h1 class="welcome-title">Como posso ajudar?</h1>
+      <p class="welcome-sub" *ngIf="!activePlaybook">
+        Sou seu assistente de auditoria multiagente.<br>
+        Descreva o que deseja auditar e eu farei a análise completa.
+      </p>
+      <p class="welcome-sub" *ngIf="activePlaybook">
+        Playbook <strong>{{ activePlaybook.name }}</strong> ativo — você está conversando só com este pipeline.
+      </p>
+
+      <!-- Sugestões do playbook ativo (quando houver) -->
+      <div class="suggestions" *ngIf="activePlaybook && playbookSuggestions.length">
+        <button class="suggestion-card" *ngFor="let s of playbookSuggestions" (click)="fillSuggestion(s.text)">
+          <strong *ngIf="s.title">{{ s.title }}</strong>
+          {{ s.text }}
+        </button>
+      </div>
+
+      <!-- Sugestões padrão (sem playbook, ou playbook sem sugestões) -->
+      <div class="suggestions" *ngIf="!activePlaybook">
+        <button class="suggestion-card" (click)="fillSuggestion('Analise a queda do serviço de pagamentos ocorrida ontem')">
+          <strong>🔥 Caso crítico</strong>
+          Analisar queda de serviço
+        </button>
+        <button class="suggestion-card" (click)="fillSuggestion('Investigue o aumento de latência no microsserviço de autenticação')">
+          <strong>⚡ Performance</strong>
+          Investigar latência
+        </button>
+        <button class="suggestion-card" (click)="fillSuggestion('Faça a análise de causa raiz da perda de dados no banco')">
+          <strong>🔍 Causa raiz</strong>
+          Análise RCA completa
+        </button>
+        <button class="suggestion-card" (click)="fillSuggestion('Quais são as melhores práticas para auditoria técnica?')">
+          <strong>📋 Boas práticas</strong>
+          Recomendações
+        </button>
+      </div>
+    </div>
+
+    <!-- Mensagens -->
+    <div *ngFor="let m of messages; trackBy: trackMessage"
+         class="message-row" [class.user-row]="m.role === 'user'" [class.assistant-row]="m.role !== 'user'">
+      <div class="msg-avatar" [class.user]="m.role === 'user'" [class.assistant]="m.role !== 'user'">
+        {{ m.role === 'user' ? 'V' : '🛡️' }}
+      </div>
+      <div class="msg-content-wrap">
+        <div class="msg-author">{{ m.role === 'user' ? 'Você' : 'Multi-Agentes Auditoria' }}</div>
+
+        <!-- Árvore de tool-calls (o que o agente fez neste turno) -->
+        <div class="tool-calls-group" *ngIf="(m.tool_calls || []).length">
+          <app-tool-call *ngFor="let tc of m.tool_calls" [tc]="tc"></app-tool-call>
+        </div>
+
+        <!-- Anexos/artefatos, roteados por kind -->
+        <ng-container *ngFor="let att of attachmentsOf(m)">
+          <app-table-card *ngIf="att.kind === 'table'" [att]="asTable(att)" [conversationId]="conversationId"></app-table-card>
+          <app-document-card *ngIf="att.kind === 'document'" [att]="asDocument(att)"></app-document-card>
+          <app-export-card *ngIf="att.kind === 'export'" [att]="asExport(att)"></app-export-card>
+          <app-chart-card *ngIf="att.kind === 'chart'" [att]="asChart(att)"></app-chart-card>
+          <app-mermaid-card *ngIf="att.kind === 'mermaid'" [att]="asMermaid(att)"></app-mermaid-card>
+        </ng-container>
+
+        <div class="msg-text" *ngIf="m.content">
+          <!-- Usuário com anexo: o content é o resumo técnico — mostra discreto. -->
+          <ng-container *ngIf="m.role === 'user'">
+            <details class="attachment-summary" *ngIf="m.attachment; else plainUser">
+              <summary>Mostrar resumo enviado ao agente</summary>
+              <div class="attachment-summary-body" [appMarkdown]="m.content"></div>
+            </details>
+            <ng-template #plainUser>{{ m.content }}</ng-template>
+          </ng-container>
+          <div *ngIf="m.role !== 'user'" [appMarkdown]="m.content"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Placeholder de upload em andamento -->
+    <div class="message-row user-row" *ngIf="uploading">
+      <div class="msg-avatar user">V</div>
+      <div class="msg-content-wrap">
+        <div class="msg-author">Você</div>
+        <div class="upload-placeholder">
+          <span class="spinner"></span>
+          <span>{{ uploading }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Balão "pensando" com log de progresso ao vivo -->
+    <div class="typing-row" *ngIf="typing">
+      <div class="msg-avatar assistant">🛡️</div>
+      <div class="msg-content-wrap">
+        <div class="msg-author">Multi-Agentes Auditoria</div>
+        <div class="typing-dots"><span></span><span></span><span></span></div>
+        <div class="progress-log">
+          <div *ngFor="let p of progress; trackBy: trackProgress"
+               class="progress-line" [class.massiva]="p.massiva">
+            <span class="progress-icon">{{ p.icon }}</span>
+            <span>{{ p.text }}</span>
+            <span class="progress-pct" *ngIf="p.massiva">{{ p.pct }}%</span>
+          </div>
+        </div>
+        <!-- Abre a execução expandida ao vivo no painel lateral -->
+        <button class="live-open-btn" *ngIf="liveCount"
+                (click)="openLivePanel()"
+                title="Ver a execução expandida ao vivo">
+          🔍 Ver execução ao vivo ({{ liveCount }})
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <div class="input-wrapper">
+      <!-- Inputs de arquivo (escondidos, disparados pelo menu de anexo) -->
+      <input type="file" #fileInput hidden multiple
+             accept=".csv,.xlsx,.xls,.pdf,.docx,.doc,.pptx,.ppt,.html,.htm,.md,.txt,.png,.jpg,.jpeg,.tiff,.tif,.bmp"
+             (change)="onSingleFiles($event)" />
+      <input type="file" #batchFilesInput hidden multiple accept=".pdf,.txt" (change)="onBatchFiles($event)" />
+      <input type="file" #batchFolderInput hidden webkitdirectory multiple (change)="onBatchFiles($event)" />
+
+      <div class="attach-wrap">
+        <button class="attach-btn" title="Anexar arquivos" type="button" (click)="toggleAttachMenu()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+          </svg>
+        </button>
+        <div class="attach-menu" [hidden]="!attachMenuOpen" role="menu">
+          <button class="attach-menu-item" type="button" role="menuitem" (click)="pickSingle()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+            <span><strong>Arquivo(s)</strong><small>Uma ou mais tabelas (CSV/XLSX) ou documentos (PDF/DOCX/imagem)</small></span>
+          </button>
+          <button class="attach-menu-item" type="button" role="menuitem" (click)="pickBatchFiles()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6"/></svg>
+            <span><strong>Vários PDFs/TXTs</strong><small>Extrai cada um em uma tabela [arquivo, conteúdo]</small></span>
+          </button>
+          <button class="attach-menu-item" type="button" role="menuitem" (click)="pickBatchFolder()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h5l2 3h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
+            <span><strong>Uma pasta inteira</strong><small>Pega todos os PDFs/TXTs de dentro dela</small></span>
+          </button>
+        </div>
+      </div>
+
+      <button class="attach-btn playbook-btn" [class.has-active]="activePlaybook" type="button"
+              [title]="activePlaybook ? ('Playbook ativo: ' + activePlaybook.name) : 'Selecionar um playbook (pipeline multi-agente)'"
+              (click)="openPlaybookPicker()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+          <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+          <path d="M6.5 10v2.5a2 2 0 0 0 2 2H14M14 6.5h-1.5"/>
+        </svg>
+        <span class="kb-badge" [hidden]="!activePlaybook">📐</span>
+      </button>
+
+      <button class="session-agent-btn" [class.has-agent]="hasSessionAgent" type="button"
+              [title]="hasSessionAgent ? 'Editar o agente desta sessão' : 'Criar seu agente para essa sessão'"
+              (click)="openSessionAgent()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="8" width="16" height="11" rx="2.5"/>
+          <path d="M12 3v3M9 13h.01M15 13h.01M2 12v3M22 12v3"/>
+        </svg>
+        <span class="session-agent-dot" aria-hidden="true"></span>
+      </button>
+
+      <button class="attach-btn kb-btn" [class.has-active]="kbCount" type="button"
+              title="Bases de conhecimento (RAG)" (click)="openKbs()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+        </svg>
+        <span class="kb-badge" [hidden]="!kbCount">{{ kbCount }}</span>
+      </button>
+
+      <button class="attach-btn know-btn" [class.has-active]="knowCount" type="button"
+              title="Conhecimentos (prompts de especialista)" (click)="openKnowledge()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 14l9-5-9-5-9 5 9 5z"/>
+          <path d="M12 14l6.16-3.42A12 12 0 0 1 19 15.5a12 12 0 0 1-14 0 12 12 0 0 1 .84-4.92L12 14z"/>
+          <path d="M12 14v7"/>
+        </svg>
+        <span class="kb-badge know-badge" [hidden]="!knowCount">{{ knowCount }}</span>
+      </button>
+
+      <textarea
+        id="msg-input"
+        rows="1"
+        placeholder="Descreva o que deseja auditar..."
+        [(ngModel)]="input"
+        (keydown)="onKeydown($event)"
+        autofocus
+      ></textarea>
+      <button class="send-btn" *ngIf="!isLoading" [disabled]="!input.trim()" (click)="send()" title="Enviar (Enter)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 19V5M5 12l7-7 7 7"/>
+        </svg>
+      </button>
+      <button class="send-btn" *ngIf="isLoading" (click)="stop()" title="Parar geração">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="#fff" stroke="none">
+          <rect x="6" y="6" width="12" height="12" rx="2"/>
+        </svg>
+      </button>
+    </div>
+    <p class="input-hint">Enter para enviar · Shift+Enter para nova linha · 📎 anexar arquivos, vários PDFs/TXTs ou uma pasta</p>
+  </div>
+</div>
+
+<!-- Modais do chat -->
+<app-session-agent-modal
+  [open]="saModalOpen"
+  [conversationId]="conversationId"
+  [hasAgent]="hasSessionAgent"
+  (saved)="onSaSaved($event)"
+  (deleted)="onSaDeleted()"
+  (closed)="saModalOpen = false">
+</app-session-agent-modal>
+
+<app-kb-modal
+  [open]="kbModalOpen"
+  [active]="activeKbs"
+  (save)="onKbsSaved($event)"
+  (closed)="kbModalOpen = false">
+</app-kb-modal>
+
+<app-knowledge-modal
+  [open]="knowModalOpen"
+  [active]="activeKnowledge"
+  (save)="onKnowledgeSaved($event)"
+  (closed)="knowModalOpen = false">
+</app-knowledge-modal>
+
+<app-playbook-picker
+  [open]="playbookModalOpen"
+  [activeId]="activePlaybookId"
+  (select)="onPlaybookSelected($event)"
+  (closed)="playbookModalOpen = false">
+</app-playbook-picker>
+
+<!-- Painel de execução ao vivo (estilo artifacts, lado direito) -->
+<div class="html-preview-panel live-panel" #livePanel
+     [class.fullscreen]="livePanelFull" *ngIf="livePanelOpen">
+  <div class="html-preview-bar">
+    <div class="html-preview-title">
+      ⚙️ Execução ao vivo
+      <span class="live-panel-badge" *ngIf="liveRunning">
+        <span class="live-spinner"></span> rodando
+      </span>
+    </div>
+    <div class="html-preview-actions">
+      <button class="html-preview-btn" (click)="toggleLiveFull()"
+              [title]="livePanelFull ? 'Restaurar' : 'Tela cheia'">
+        <svg *ngIf="!livePanelFull" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        <svg *ngIf="livePanelFull" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
+      </button>
+      <button class="html-preview-btn" (click)="closeLivePanel()" title="Fechar (Esc)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="html-preview-body live-panel-body">
+    <div class="live-tree" *ngIf="liveTree.length; else liveEmpty">
+      <app-live-node *ngFor="let n of liveTree" [node]="n"></app-live-node>
+    </div>
+    <ng-template #liveEmpty>
+      <div class="html-preview-status">Aguardando a primeira ação do agente…</div>
+    </ng-template>
+  </div>
+</div>

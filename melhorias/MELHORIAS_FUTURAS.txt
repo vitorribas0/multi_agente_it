@@ -1,0 +1,76 @@
+# Melhorias Futuras — Tech Auditor (chat / agentes)
+
+Documento vivo. Lista de melhorias identificadas na auditoria do fluxo de
+chat (`auditor/views.py` + `auditor/ai_service.py`). Ordem = prioridade por
+impacto. Marque `[x]` quando concluído.
+
+---
+
+## 🔴 Prioridade ALTA
+
+### 1. Janela de contexto / memória da conversa (gargalo principal)
+**Problema:** em `chat_message` e `chat_stream` (`auditor/views.py`), o
+histórico mandado ao modelo é montado com TODAS as mensagens da conversa:
+
+```python
+history = [{"role": m.role, "content": m.content} for m in conv.messages.all()]
+```
+
+Não há janela, corte nem sumarização. Em conversas longas (auditorias com
+30–50+ trocas, várias com blocos JSON de upload), o contexto cresce
+linearmente a cada turno.
+
+**Consequências:** custo por turno sobe sem parar, latência aumenta e
+eventualmente estoura o limite de contexto do modelo (erro/degradação).
+
+**Proposta:**
+- Manter as N últimas mensagens na íntegra + resumo das antigas
+  (sumarização incremental), OU, no mínimo:
+- Corte por orçamento (número de mensagens / total de caracteres),
+  preservando sempre o system prompt e as mensagens mais recentes.
+- Considerar marcar mensagens de upload (com blocos JSON grandes) para
+  compressão preferencial.
+
+---
+
+## 🟡 Prioridade MÉDIA
+
+### 2. Query N+1 ao carregar mensagens + tool calls
+**Problema:** `conv.messages.all()` seguido de acesso a `tool_calls.all()`
+por mensagem (em `_message_payload`) gera N+1 queries.
+
+**Proposta:** usar `prefetch_related("tool_calls")` ao listar mensagens
+(em `conversation_detail` e onde o histórico é montado). Ganho de latência
+em conversas com muitas mensagens/tool calls.
+
+### 3. Resultados de tool de turnos anteriores não voltam ao modelo
+**Observação (trade-off, não bug):** o histórico só carrega `role` +
+`content`; os resultados das `ToolCall` de turnos passados NÃO são
+reenviados ao modelo. Isso ajuda a conter o tamanho do contexto, mas o
+agente "esquece" o que as ferramentas retornaram antes e pode re-executar
+tools desnecessariamente.
+
+**Proposta:** avaliar reinserir um RESUMO curto dos resultados de tool mais
+relevantes (não o payload inteiro) quando fizer sentido — equilibrando com
+o item 1.
+
+---
+
+## 🟢 Prioridade BAIXA / acompanhamento
+
+### 4. MAX_ITERATIONS + conclusão forçada — CONCLUÍDO
+- `MAX_ITERATIONS` ajustado de 12 → 18 em `auditor/ai_service.py`.
+- Ao esgotar o orçamento de iterações com trabalho já feito, agora é
+  feita uma última chamada ao modelo SEM tools, forçando uma resposta
+  conclusiva (em vez de descartar tudo com a mensagem de erro genérica).
+- Status: implementado e commitado.
+
+### 5. Clusterização de incidentes sobre texto livre
+**Observação:** as tools de clustering usam apenas colunas numéricas. Em
+datasets de incidentes, as colunas relevantes (Descrição, Causa, Solução,
+Sintoma, Categoria) são texto livre / categóricas — o clustering acaba
+rodando sobre pouca ou nenhuma feature informativa.
+
+**Proposta:** pré-processar texto antes de clusterizar — TF-IDF ou
+embeddings das descrições + one-hot das categóricas — e clusterizar sobre
+essa matriz. Tornaria o agrupamento de incidentes de fato assertivo.

@@ -1,0 +1,61 @@
+<div class="export-card">
+  <div class="export-card-icon" [ngClass]="iconClass">{{ fileIcon }}</div>
+  <div class="export-card-info">
+    <div class="export-card-filename" [title]="filename">{{ filename }}</div>
+    <div class="export-card-meta">
+      <span class="export-card-meta-tag format">{{ fmt || '?' }}</span>
+      <span class="export-card-meta-tag">{{ detailTag }}</span>
+      <span class="export-card-meta-tag" *ngIf="sizeStr">{{ sizeStr }}</span>
+    </div>
+  </div>
+  <button *ngIf="canPreview" type="button" class="btn-download btn-preview" (click)="openPreview()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
+    </svg>
+    Visualizar
+  </button>
+  <a class="btn-download" [href]="att.download_url" [attr.download]="filename">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+    </svg>
+    Baixar
+  </a>
+</div>
+
+<!-- Painel de visualização (só HTML), ancorado à direita na altura do chat.
+     iframe isolado: allow-scripts SEM allow-same-origin → os gráficos rodam
+     mas o código não acessa o app. -->
+<div
+  #previewPanel
+  class="html-preview-panel"
+  [class.fullscreen]="fullscreen"
+  *ngIf="expanded"
+>
+  <div class="html-preview-bar">
+    <span class="html-preview-title" [title]="title">{{ title }}</span>
+    <div class="html-preview-actions">
+      <a class="html-preview-btn" [href]="att.download_url" [attr.download]="filename" title="Baixar">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+      </a>
+      <button type="button" class="html-preview-btn" (click)="toggleFullscreen()" [title]="fullscreen ? 'Minimizar' : 'Expandir tela cheia'">
+        <svg *ngIf="!fullscreen" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        <svg *ngIf="fullscreen" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+      </button>
+      <button type="button" class="html-preview-btn" (click)="closePreview()" title="Fechar">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="html-preview-body">
+    <div class="html-preview-status" *ngIf="loadingPreview">Carregando apresentação…</div>
+    <div class="html-preview-status error" *ngIf="previewError">⚠️ {{ previewError }}</div>
+    <iframe
+      *ngIf="srcdoc && !previewError"
+      class="html-preview-frame"
+      [srcdoc]="srcdoc"
+      sandbox="allow-scripts allow-popups allow-downloads"
+      referrerpolicy="no-referrer"
+      title="Apresentação"
+    ></iframe>
+  </div>
+</div>

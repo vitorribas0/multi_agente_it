@@ -1,0 +1,55 @@
+<div class="live-node" [class.is-running]="node.status === 'running'"
+     [class.is-error]="node.status === 'error'">
+  <button class="live-node-head" (click)="toggle()" type="button">
+    <span class="live-node-caret" *ngIf="hasArgs || node.children.length">{{ open ? '▾' : '▸' }}</span>
+    <span class="live-node-icon">{{ node.icon }}</span>
+    <span class="live-node-label">{{ node.label }}</span>
+
+    <!-- Estado ao vivo -->
+    <span class="live-node-status" *ngIf="node.status === 'running'">
+      <span class="live-spinner"></span> processando…
+    </span>
+    <span class="live-node-status done" *ngIf="node.status === 'done'">
+      ✓ <span *ngIf="durationStr">{{ durationStr }}</span>
+    </span>
+    <span class="live-node-status error" *ngIf="node.status === 'error'">✕ erro</span>
+  </button>
+
+  <div class="live-node-body" *ngIf="open">
+    <!-- Código sendo processado (SQL/pandas), estilo editor -->
+    <div class="code-block" *ngIf="codeArg">
+      <div class="code-block-bar">
+        <span class="code-block-lang">{{ codeLang }}</span>
+        <button class="code-block-copy" type="button" (click)="copyCode()"
+                [title]="copied ? 'Copiado!' : 'Copiar código'">
+          <span *ngIf="!copied">📋 Copiar</span>
+          <span *ngIf="copied">✓ Copiado</span>
+        </button>
+      </div>
+      <pre class="code-block-pre"><code class="hljs" [innerHTML]="codeHtml"></code></pre>
+    </div>
+
+    <!-- Tarefa / contexto passado ao agente — bloco de prosa legível -->
+    <div class="live-task" *ngFor="let p of proseArgs">
+      <span class="live-task-label">{{ p.key }}</span>
+      <p class="live-task-text">{{ p.val }}</p>
+    </div>
+
+    <!-- Demais argumentos -->
+    <div class="live-node-args" *ngIf="otherArgs.length">
+      <div class="live-arg" *ngFor="let a of otherArgs">
+        <span class="live-arg-key">{{ a.key }}</span>
+        <span class="live-arg-val">{{ a.val }}</span>
+      </div>
+    </div>
+
+    <!-- Resultado / erro (quando termina) -->
+    <pre class="live-node-result error" *ngIf="node.status === 'error' && node.error">{{ node.error }}</pre>
+    <pre class="live-node-result" *ngIf="node.status === 'done' && node.resultPreview">{{ node.resultPreview }}</pre>
+
+    <!-- Filhos: tools do sub-agente delegado -->
+    <div class="live-node-children" *ngIf="node.children.length">
+      <app-live-node *ngFor="let c of node.children" [node]="c" [depth]="depth + 1"></app-live-node>
+    </div>
+  </div>
+</div>

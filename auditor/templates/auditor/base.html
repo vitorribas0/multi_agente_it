@@ -1,0 +1,166 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multi-Agentes Auditoria - {% block title %}Sistema Multiagente{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <!-- Mermaid: renderiza fluxogramas gerados pela tool gerar_fluxograma -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>
+    if (window.mermaid) {
+      mermaid.initialize({
+        startOnLoad: false,        // renderizamos sob demanda no chat.js
+        securityLevel: 'strict',   // sanitiza rótulos (sem HTML/script injetado)
+        theme: 'base',
+        fontFamily: 'Inter, system-ui, sans-serif',
+        flowchart: {
+          curve: 'basis',
+          useMaxWidth: false,      // controlamos o tamanho via zoom/pan no chat.js
+          htmlLabels: true,
+          padding: 16,
+          nodeSpacing: 55,
+          rankSpacing: 65,
+        },
+        themeVariables: {
+          background: 'transparent',
+          // Nós (retângulos / ações)
+          primaryColor: '#eef2ff',
+          primaryBorderColor: '#6366f1',
+          primaryTextColor: '#1e1b4b',
+          nodeBorder: '#6366f1',
+          // Variações (decisões / nós secundários)
+          secondaryColor: '#f3e8ff',
+          secondaryBorderColor: '#a855f7',
+          secondaryTextColor: '#3b0764',
+          tertiaryColor: '#cffafe',
+          tertiaryBorderColor: '#06b6d4',
+          tertiaryTextColor: '#083344',
+          // Arestas e rótulos
+          lineColor: '#8b5cf6',
+          edgeLabelBackground: '#ffffff',
+          // Subgráficos / clusters
+          clusterBkg: '#f8fafc',
+          clusterBorder: '#c7d2fe',
+          titleColor: '#1e1b4b',
+          fontSize: '15px',
+        },
+        themeCSS: `
+          .node rect, .node polygon, .node circle, .node ellipse, .node path {
+            filter: drop-shadow(0 3px 6px rgba(79,70,229,.18));
+            stroke-width: 1.6px;
+          }
+          .cluster rect { rx: 12px; ry: 12px; filter: drop-shadow(0 2px 5px rgba(30,27,75,.08)); }
+          .edgePath path, .flowchart-link { stroke-width: 2px; }
+          .edgeLabel { font-weight: 600; }
+          .edgeLabel rect, .edgeLabel .label-container { fill: #ffffff; opacity: .92; }
+          .marker { fill: #8b5cf6; stroke: #8b5cf6; }
+          .nodeLabel, .label { font-weight: 600; letter-spacing: .1px; }
+        `,
+      });
+    }
+  </script>
+  <link rel="stylesheet" href="{% static 'css/style.css' %}?v=22">
+</head>
+<body>
+<div class="app">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <button class="sidebar-collapse-btn" id="btn-collapse-sidebar" title="Minimizar/expandir sidebar">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 18l-6-6 6-6"/>
+      </svg>
+    </button>
+    <div class="sidebar-header">
+      <div class="sidebar-brand">
+        <div class="brand-icon">🛡️</div>
+        <div>
+          <div class="brand-name">Multi-Agentes Auditoria</div>
+          <div class="brand-sub">Auditoria multiagente</div>
+        </div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <span class="nav-section-label">Navegação</span>
+      <a href="{% url 'auditor:index' %}" class="nav-item {% if request.resolver_match.url_name == 'index' %}active{% endif %}">
+        <span class="nav-icon">💬</span>
+        <span>Chat</span>
+      </a>
+      <a href="{% url 'auditor:manual' %}" class="nav-item {% if request.resolver_match.url_name == 'manual' %}active{% endif %}">
+        <span class="nav-icon">📖</span>
+        <span>Manual</span>
+      </a>
+      <a href="{% url 'auditor:settings' %}" class="nav-item {% if request.resolver_match.url_name == 'settings' %}active{% endif %}">
+        <span class="nav-icon">⚙️</span>
+        <span>Configurações</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-history">
+      <button class="new-chat-btn" id="new-chat-btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        Nova conversa
+      </button>
+      <span class="nav-section-label">Histórico</span>
+      <div class="history-list" id="history-list">
+        {# Histórico renderizado server-side para aparecer já no reload,        #}
+        {# sem o "flash" de lista vazia. O main.js re-renderiza por cima depois. #}
+        <p class="history-empty" id="history-empty"{% if sidebar_conversations %} style="display: none;"{% endif %}>Nenhuma conversa salva ainda.</p>
+        {% for conv in sidebar_conversations %}
+        <div class="history-item{% if sidebar_active_conversation_id == conv.id|stringformat:'s' %} active{% endif %}">
+          <a href="/?c={{ conv.id }}" class="history-item-link">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span class="history-item-title">{{ conv.title }}</span>
+          </a>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-info">
+        <span class="info-dot"></span>
+        <span>Multiagente ativo</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<script src="{% static 'js/main.js' %}?v=10"></script>
+<script>
+(function() {
+  const sidebar = document.getElementById('sidebar');
+  const btnToggle = document.getElementById('btn-collapse-sidebar');
+
+  if (!sidebar || !btnToggle) return;
+
+  btnToggle.addEventListener('click', function() {
+    const collapsed = sidebar.classList.toggle('collapsed');
+    localStorage.setItem('sidebar-collapsed', collapsed ? '1' : '0');
+  });
+
+  if (localStorage.getItem('sidebar-collapsed') === '1') {
+    sidebar.classList.add('collapsed');
+  }
+})();
+</script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

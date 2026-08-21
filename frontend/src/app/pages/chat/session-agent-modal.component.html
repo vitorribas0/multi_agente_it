@@ -1,0 +1,98 @@
+<div class="sa-modal-backdrop" [hidden]="!open" (click)="close()">
+  <div class="sa-modal" role="dialog" aria-modal="true" (click)="$event.stopPropagation()">
+    <div class="sa-modal-header">
+      <div class="sa-modal-titlewrap">
+        <span class="sa-modal-badge">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="8" width="16" height="11" rx="2.5"/>
+            <path d="M12 3v3M9 13h.01M15 13h.01M2 12v3M22 12v3"/>
+          </svg>
+          <span class="session-agent-dot static"></span>
+        </span>
+        <div>
+          <h2 class="sa-modal-title">Agente desta sessão</h2>
+          <p class="sa-modal-sub">Existe só neste chat — não afeta os agentes do sistema</p>
+        </div>
+      </div>
+      <button class="sa-modal-close" type="button" (click)="close()" title="Fechar (Esc)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="sa-modal-body">
+      <div class="sa-field-row">
+        <div class="sa-field sa-field-icon">
+          <label for="sa-icon">Ícone</label>
+          <input type="text" id="sa-icon" maxlength="4" [(ngModel)]="icon" />
+        </div>
+        <div class="sa-field sa-field-grow">
+          <label for="sa-name">Nome do agente</label>
+          <input type="text" id="sa-name" placeholder="Ex.: Especialista em LGPD" maxlength="80" [(ngModel)]="name" />
+        </div>
+      </div>
+
+      <div class="sa-field">
+        <label for="sa-prompt">System prompt</label>
+        <textarea id="sa-prompt" rows="5" placeholder="Descreva a especialidade e o comportamento do agente…" [(ngModel)]="systemPrompt"></textarea>
+        <p class="sa-field-hint">Boas práticas de auditoria são adicionadas automaticamente por trás.</p>
+      </div>
+
+      <div class="sa-field">
+        <label for="sa-guardrails">Guardrails</label>
+        <textarea id="sa-guardrails" rows="3" placeholder="Limites e regras que o agente nunca deve violar…" [(ngModel)]="guardrails"></textarea>
+      </div>
+
+      <div class="sa-field">
+        <label>Documentos do agente <span class="sa-tools-count">{{ docsCount }}</span></label>
+        <p class="sa-field-hint">Anexe políticas, manuais ou normas (PDF, TXT, MD, DOCX). O conteúdo fica sempre no contexto do agente.</p>
+        <div class="sa-docs-list">
+          <div class="sa-doc-chip" *ngFor="let d of docs; let i = index">
+            <span class="sa-doc-ico">📄</span>
+            <span class="sa-doc-name" [title]="d.filename">{{ d.filename }}</span>
+            <span class="sa-doc-meta">{{ docMeta(d) }}</span>
+            <button class="sa-doc-remove" type="button" title="Remover" (click)="removeDoc(i)">×</button>
+          </div>
+        </div>
+        <input type="file" #docInput accept=".pdf,.txt,.md,.docx,.doc" multiple hidden (change)="onDocFiles($event)" />
+        <button class="sa-btn ghost" type="button" (click)="pickDocs()">＋ Anexar documento</button>
+      </div>
+
+      <div class="sa-field-row">
+        <div class="sa-field sa-field-grow">
+          <label for="sa-model">Modelo</label>
+          <select id="sa-model" [(ngModel)]="model">
+            <option *ngFor="let m of models" [value]="m">{{ m }}</option>
+          </select>
+        </div>
+        <div class="sa-field sa-field-temp">
+          <label for="sa-temp">Temperatura <span>{{ tempLabel }}</span></label>
+          <input type="range" id="sa-temp" min="0" max="2" step="0.05" [(ngModel)]="temperature" />
+        </div>
+      </div>
+
+      <div class="sa-field">
+        <label>Tools disponíveis <span class="sa-tools-count">{{ toolsCount }}</span></label>
+        <div class="sa-tools-grid">
+          <label class="sa-tool-chip" *ngFor="let t of tools" [class.checked]="isToolChecked(t.slug)">
+            <input type="checkbox" [checked]="isToolChecked(t.slug)" (change)="toggleTool(t.slug)" />
+            <span class="sa-tool-ico">{{ t.icon || '⚡' }}</span>
+            <span class="sa-tool-name" [title]="t.description || t.name">{{ t.name }}</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="sa-modal-footer">
+      <div class="sa-footer-left">
+        <input type="file" #importInput accept=".json,application/json" hidden (change)="onImportFile($event)" />
+        <button class="sa-btn ghost" type="button" title="Importar agente de um arquivo .json" (click)="pickImport()">⬆ Importar</button>
+        <button class="sa-btn ghost" type="button" title="Exportar este agente como .json" (click)="onExport()">⬇ Exportar</button>
+        <button class="sa-btn danger" type="button" title="Excluir o agente desta sessão" [hidden]="!canDelete" (click)="onDelete()">Excluir</button>
+      </div>
+      <div class="sa-footer-right">
+        <button class="sa-btn ghost" type="button" (click)="close()">Cancelar</button>
+        <button class="sa-btn primary" type="button" [disabled]="saving" (click)="onSave()">{{ saving ? 'Salvando…' : 'Salvar agente' }}</button>
+      </div>
+    </div>
+  </div>
+</div>

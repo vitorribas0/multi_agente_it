@@ -1,0 +1,9 @@
+# Angular / Node
+/node_modules
+/dist
+/out-tsc
+/.angular
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+*.log

@@ -1,0 +1,65 @@
+<div class="sa-modal-backdrop" [hidden]="!open" (click)="close()">
+  <div class="sa-modal" role="dialog" aria-modal="true" (click)="$event.stopPropagation()">
+    <div class="sa-modal-header">
+      <div class="sa-modal-titlewrap">
+        <span class="sa-modal-badge kb-modal-badge">📐</span>
+        <div>
+          <h2 class="sa-modal-title">Playbooks</h2>
+          <p class="sa-modal-sub kb-modal-sub">
+            Selecione um pipeline para conversar só com ele — isolado dos agentes globais
+          </p>
+        </div>
+      </div>
+      <button class="sa-modal-close" type="button" (click)="close()" title="Fechar (Esc)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="sa-modal-body">
+      <div class="pb-pick-list">
+        <div class="kb-empty" *ngIf="loading">Carregando…</div>
+
+        <!-- Opção "nenhum" (desvincula → agentes globais). -->
+        <button
+          type="button"
+          class="pb-pick-card none"
+          [class.selected]="isActive(null)"
+          (click)="choose(null)"
+          *ngIf="!loading"
+        >
+          <span class="pb-pick-icon">💬</span>
+          <span class="pb-pick-meta">
+            <span class="pb-pick-name">Nenhum (agentes globais)</span>
+            <span class="pb-pick-desc">Chat padrão com os agentes já configurados</span>
+          </span>
+          <span class="pb-pick-check" *ngIf="isActive(null)">✓</span>
+        </button>
+
+        <button
+          type="button"
+          class="pb-pick-card"
+          *ngFor="let pb of playbooks; trackBy: trackPb"
+          [class.selected]="isActive(pb.id)"
+          (click)="choose(pb)"
+        >
+          <span class="pb-pick-icon">{{ pb.icon }}</span>
+          <span class="pb-pick-meta">
+            <span class="pb-pick-name">{{ pb.name }}</span>
+            <span class="pb-pick-desc">{{ pb.description || (pb.node_count + ' agente(s)') }}</span>
+          </span>
+          <span class="pb-pick-check" *ngIf="isActive(pb.id)">✓</span>
+        </button>
+
+        <div class="kb-empty" *ngIf="loaded && !loading && !playbooks.length">
+          Nenhum playbook cadastrado. Crie um na tela <strong>📐 Playbooks</strong>.
+        </div>
+      </div>
+    </div>
+
+    <div class="sa-modal-footer">
+      <div class="sa-footer-right">
+        <button class="sa-btn ghost" type="button" (click)="close()">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,126 @@
+==============================================================================
+COMO SUBIR UMA NOVA TOOL — Tech Auditor
+==============================================================================
+
+Resumo de 1 linha:
+  Criar UM arquivo .py dentro de tools/ com o decorator @tool. Pronto.
+  O autodiscovery registra sozinho — não precisa mexer em mais nada.
+
+
+------------------------------------------------------------------------------
+1. ONDE CRIAR
+------------------------------------------------------------------------------
+Crie um novo arquivo em:
+
+    tools/minha_tool.py
+
+NÃO edite:
+  - tools/registry.py      (motor de registro)
+  - tools/__init__.py      (autodiscovery — varre tools/ sozinho)
+  - auditor/ai_service.py  (orquestração)
+
+O nome da função vira o "slug" da tool (identificador único).
+
+
+------------------------------------------------------------------------------
+2. ESQUELETO MÍNIMO
+------------------------------------------------------------------------------
+    """Descrição curta do arquivo."""
+    import json
+    from .registry import tool
+
+
+    @tool(
+        description=(
+            "O que a tool faz. "
+            "USE quando: <situações em que o agente deve chamar>. "
+            "NÃO use: <situações em que NÃO deve chamar>."
+        ),
+        icon="🔧",
+    )
+    def minha_tool(parametro: str) -> str:
+        """Resumo do que faz.
+
+        Args:
+            parametro: Descrição clara do parâmetro (vira a doc no schema).
+        """
+        return f"Resultado: {parametro}"
+
+
+------------------------------------------------------------------------------
+3. REGRAS IMPORTANTES
+------------------------------------------------------------------------------
+* SEMPRE retorne string. Se retornar dict/list, é convertido p/ JSON
+  automaticamente. Convenção de erro: json.dumps({"erro": "msg"}).
+  Convenção de sucesso: {"ok": True, ...}.
+
+* TYPE HINTS definem o schema enviado ao LLM:
+    str   -> string      int  -> integer    float -> number
+    bool  -> boolean     list -> array      dict  -> object
+
+* DOCSTRING estilo Google: a seção "Args:" é parseada e vira a descrição
+  de cada parâmetro no schema. Capriche — é o que o LLM lê.
+
+* PARÂMETROS com "_" no início são ignorados pelo schema (privados).
+  Exceção especial: _session (ver abaixo).
+
+
+------------------------------------------------------------------------------
+4. ACESSAR ESTADO DA SESSÃO (_session)
+------------------------------------------------------------------------------
+Adicione um parâmetro chamado _session: dict — o runtime injeta sozinho.
+Ele NÃO aparece para o LLM, e marca a tool como "usa sessão".
+
+    @tool(description="...", icon="✨")
+    def minha_tool(coluna: str, _session: dict) -> str:
+        """...
+        Args:
+            coluna: nome da coluna.
+        """
+        rows = _session.get("athena_last_result")   # dataset (lista de dicts)
+        ...
+        return json.dumps({"ok": True}, ensure_ascii=False, default=str)
+
+Chaves de sessão mais usadas:
+  _session["athena_last_result"]   -> dataset atual (list[dict])
+  _session["athena_last_columns"]  -> colunas do dataset
+  _session["__pending_attachment"] -> anexo a devolver no chat (tabela/arquivo)
+
+
+------------------------------------------------------------------------------
+5. OPÇÕES DO DECORATOR @tool
+------------------------------------------------------------------------------
+  description       (obrigatório) texto que o LLM lê p/ decidir usar a tool.
+  slug              (opcional) default = nome da função.
+  name              (opcional) nome de exibição; default = nome formatado.
+  icon              (opcional) emoji; default "⚡".
+  is_human_in_loop  (opcional) True = pausa o loop e pergunta ao usuário.
+                    Se emitida junto de outras tools, só ela é respeitada.
+
+
+------------------------------------------------------------------------------
+6. HABILITAR A TOOL PARA UM AGENTE
+------------------------------------------------------------------------------
+A tool fica disponível, mas o agente só a enxerga se o slug estiver em
+"tools_enabled". Duas formas:
+
+  a) Django admin: /admin/auditor/agent/ -> editar agente -> adicionar o
+     slug no campo JSON tools_enabled -> salvar.
+
+  b) Tela de config (/api/config/): marcar o checkbox da tool no agente.
+
+Vale tanto para Agent (democratizado) quanto para SessionAgent (da conversa).
+
+
+------------------------------------------------------------------------------
+7. CHECKLIST FINAL
+------------------------------------------------------------------------------
+  [ ] Arquivo criado em tools/<nome>.py
+  [ ] Função decorada com @tool e description preenchida
+  [ ] Type hints em todos os parâmetros públicos
+  [ ] Docstring com seção Args:
+  [ ] Retorna string (ou dict/list serializável)
+  [ ] _session: dict adicionado se precisar de estado da sessão
+  [ ] Slug adicionado em tools_enabled do(s) agente(s) desejado(s)
+  [ ] Reiniciar o servidor Django (autodiscovery roda no import)
+==============================================================================

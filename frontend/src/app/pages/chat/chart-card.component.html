@@ -1,0 +1,20 @@
+<div class="chart-card-backdrop" *ngIf="expanded" (click)="toggle()"></div>
+
+<div class="chart-card" [class.expanded]="expanded">
+  <div class="chart-card-header">
+    <span class="chart-card-icon">{{ meta.icon }}</span>
+    <div class="chart-card-meta">
+      <div class="chart-card-title">{{ titulo }}</div>
+      <div class="chart-card-sub">{{ sub }}</div>
+    </div>
+    <div class="chart-card-actions">
+      <button class="chart-card-btn" (click)="downloadPng()" title="Baixar PNG">PNG</button>
+      <button class="chart-card-btn primary" (click)="toggle()" [title]="expanded ? 'Fechar' : 'Ver em tela cheia'">
+        {{ expanded ? 'Fechar' : 'Expandir' }}
+      </button>
+    </div>
+  </div>
+  <div class="chart-card-viewport">
+    <img class="chart-card-img" [src]="img" [alt]="titulo" (click)="toggle()" />
+  </div>
+</div>

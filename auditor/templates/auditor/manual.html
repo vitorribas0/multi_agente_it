@@ -1,0 +1,440 @@
+{% extends 'auditor/base.html' %}
+
+{% block title %}Manual{% endblock %}
+
+{% block content %}
+<style>
+  /* Grafo "Como o sistema funciona" — específico do manual */
+  .manual-graph {
+    margin-top: 18px;
+    padding: 26px 20px;
+    background:
+      radial-gradient(circle at 20% 0%, rgba(99,102,241,.08), transparent 55%),
+      radial-gradient(circle at 90% 100%, rgba(6,182,212,.08), transparent 55%),
+      var(--bg-elevated, #fbfbfe);
+    border: 1px solid var(--border, #e5e7f0);
+    border-radius: var(--radius, 16px);
+    overflow-x: auto;
+  }
+  .manual-graph .mermaid-render { display: flex; justify-content: center; }
+  .manual-graph svg { max-width: 100%; height: auto; }
+  /* No PDF/impressão o grafo deve caber inteiro na página */
+  @media print {
+    .manual-graph { background: #fff !important; border-color: #ccc !important; page-break-inside: avoid; }
+  }
+</style>
+<div class="content-page" id="manual-doc">
+    <!-- Capa: visível apenas no PDF/impressão -->
+    <div class="print-cover print-only">
+        <div class="print-cover-icon">🛡️</div>
+        <h1 class="print-cover-title">Multi-Agentes Auditoria</h1>
+        <p class="print-cover-sub">Manual do Sistema · Documentação completa</p>
+    </div>
+
+    <div class="page-header">
+        <div class="page-header-text">
+            <h1>Manual do Sistema</h1>
+            <p class="page-subtitle">Documentação completa e guia de uso do Multi-Agentes Auditoria</p>
+        </div>
+        <button class="pdf-download-btn no-print" id="pdf-download-btn" type="button" title="Gerar PDF da documentação">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Baixar PDF
+        </button>
+    </div>
+
+    <div class="manual-content">
+        <!-- ─── Introdução ─────────────────────────────────────── -->
+        <section class="manual-section">
+            <div class="section-header">
+                <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <h2>Introdução</h2>
+            </div>
+            <p>O <strong>Multi-Agentes Auditoria</strong> é um assistente de auditoria técnica movido a IA. Um <strong>orquestrador</strong> entende o seu pedido em linguagem natural, planeja o trabalho e aciona <strong>agentes especialistas</strong> — em SQL, análise de dados, ciência de dados e leitura de documentos — que usam ferramentas para consultar bases, processar planilhas, ler PDFs, gerar gráficos e produzir relatórios. Você conversa; ele executa e mostra o caminho.</p>
+        </section>
+
+        <!-- ─── Como usar o Chat ───────────────────────────────── -->
+        <section class="manual-section">
+            <div class="section-header">
+                <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                </svg>
+                <h2>Como usar o Chat</h2>
+            </div>
+            <p>Digite sua solicitação e pressione Enter (ou clique em enviar). Você acompanha em tempo real cada passo — qual agente está atuando, qual ferramenta está rodando e o resultado de cada etapa.</p>
+            <div class="tips-grid">
+                <div class="tip-item">
+                    <span class="tip-number">1</span>
+                    <span>Descreva o objetivo em linguagem natural — não precisa saber SQL nem programação.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">2</span>
+                    <span>Anexe uma planilha ou documento pelo botão de upload para analisar seus próprios dados.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">3</span>
+                    <span>Acompanhe a “árvore” de execução: o orquestrador delega e os especialistas trabalham em conjunto.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">4</span>
+                    <span>Se uma etapa custosa exigir confirmação, o sistema pergunta antes de prosseguir.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">5</span>
+                    <span>Pode interromper a geração a qualquer momento — os resultados parciais são preservados.</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── O que você pode pedir (tipos de uso) ───────────── -->
+        <section class="manual-section">
+            <div class="section-header">
+                <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
+                </svg>
+                <h2>O que você pode pedir</h2>
+            </div>
+            <p>O sistema cobre uma gama ampla de tarefas de auditoria. Abaixo, os principais tipos de uso — cada card indica o que pedir e as capacidades envolvidas.</p>
+
+            <div class="audit-types">
+                <div class="audit-card-featured">
+                    <div class="audit-card-icon">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2 1.5 3 4 3h8c2.5 0 4-1 4-3V7M4 7c0-2 1.5-3 4-3h8c2.5 0 4 1 4 3M4 7c0 2 1.5 3 4 3h8c2.5 0 4-1 4-3"></path>
+                        </svg>
+                    </div>
+                    <div class="audit-card-content">
+                        <h3>Extração de dados (Athena / SQL)</h3>
+                        <p>Consulte as bases corporativas sem escrever SQL. Peça, por exemplo, “traga as reclamações de PF do último mês por assunto” — o agente descreve o schema, monta a query, executa e traz o resultado como um dataset pronto para análise.</p>
+                        <div class="audit-card-tags">
+                            <span class="tag">Base de reclamações (FQ)</span>
+                            <span class="tag">Consultas seguras (SELECT)</span>
+                            <span class="tag">Schema automático</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="audit-card-featured">
+                    <div class="audit-card-icon">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-6m4 6V7m4 10v-3M3 21h18M5 21V5a2 2 0 012-2h10a2 2 0 012 2v16"></path>
+                        </svg>
+                    </div>
+                    <div class="audit-card-content">
+                        <h3>Análise de dados (planilhas e datasets)</h3>
+                        <p>Suba um CSV/Excel ou use o resultado de uma consulta e peça descrições, filtros, contagens de palavras-chave, agrupamentos, extração por regex e transformações. Para casos fora do padrão, o agente pode rodar código Python (pandas) sob demanda.</p>
+                        <div class="audit-card-tags">
+                            <span class="tag">Filtrar / agrupar</span>
+                            <span class="tag">Contar termos</span>
+                            <span class="tag">Regex</span>
+                            <span class="tag">Exportar CSV/Excel</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="audit-card-featured">
+                    <div class="audit-card-icon">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"></path>
+                        </svg>
+                    </div>
+                    <div class="audit-card-content">
+                        <h3>Leitura de documentos (PDF / DOCX / imagem)</h3>
+                        <p>Anexe políticas, normativos, contratos ou laudos. O sistema extrai o texto (com OCR para digitalizações) e permite ler trechos, buscar termos, extrair tabelas e responder perguntas apoiadas no conteúdo, com citação da fonte.</p>
+                        <div class="audit-card-tags">
+                            <span class="tag">OCR</span>
+                            <span class="tag">Busca no documento</span>
+                            <span class="tag">Extração de tabelas</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="audit-card-featured">
+                    <div class="audit-card-icon">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0-18a3 3 0 013 3v5a3 3 0 01-6 0V6a3 3 0 013-3z"></path>
+                        </svg>
+                    </div>
+                    <div class="audit-card-content">
+                        <h3>Ciência de dados e detecção de anomalias</h3>
+                        <p>Segmente registros em grupos (K-Means, DBSCAN, hierárquico), descubra o número ideal de clusters, avalie a qualidade com métricas e detecte <em>outliers</em> — útil para achar casos atípicos numa massa de incidentes ou reclamações.</p>
+                        <div class="audit-card-tags">
+                            <span class="tag">Clusterização</span>
+                            <span class="tag">Outliers</span>
+                            <span class="tag">PCA</span>
+                            <span class="tag">Silhueta</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="audit-card-featured">
+                    <div class="audit-card-icon">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                    </div>
+                    <div class="audit-card-content">
+                        <h3>Classificação em massa com IA</h3>
+                        <p>Classifique, categorize ou valide centenas de registros textuais de uma vez — por exemplo, “avalie a conformidade de cada relato frente a esta política”. Cada linha recebe as colunas que você definir. Por ter custo, o sistema sempre pede sua confirmação antes de rodar.</p>
+                        <div class="audit-card-tags">
+                            <span class="tag">Classificação por linha</span>
+                            <span class="tag">Colunas sob medida</span>
+                            <span class="tag">Confirmação obrigatória</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="audit-card-featured">
+                    <div class="audit-card-icon">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                        </svg>
+                    </div>
+                    <div class="audit-card-content">
+                        <h3>Relatórios, gráficos e fluxogramas</h3>
+                        <p>Peça um relatório em PDF estilizado, gráficos (barras, linha, pizza, dispersão, histograma, boxplot, heatmap) ou um fluxograma do processo auditado. Os artefatos aparecem como cards no chat, prontos para baixar.</p>
+                        <div class="audit-card-tags">
+                            <span class="tag">PDF</span>
+                            <span class="tag">Gráficos</span>
+                            <span class="tag">Fluxogramas</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="audit-card-featured">
+                    <div class="audit-card-icon">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                        </svg>
+                    </div>
+                    <div class="audit-card-content">
+                        <h3>Perguntas sobre bases de conhecimento (RAG)</h3>
+                        <p>Ative Bases de Conhecimento ou Conhecimentos na conversa e faça perguntas apoiadas nelas. O sistema busca os trechos relevantes e responde citando as fontes — ideal para consultar normativos e procedimentos internos.</p>
+                        <div class="audit-card-tags">
+                            <span class="tag">Busca semântica</span>
+                            <span class="tag">Citação de fontes</span>
+                            <span class="tag">Busca na web</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── Os agentes ─────────────────────────────────────── -->
+        <section class="manual-section">
+            <div class="section-header">
+                <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6 0a4 4 0 00-3-3.87"></path>
+                </svg>
+                <h2>Quem faz o trabalho: os agentes</h2>
+            </div>
+            <p>Você fala apenas com o orquestrador — ele decide quando chamar cada especialista. Não é preciso escolher agente manualmente.</p>
+            <div class="tips-grid">
+                <div class="tip-item">
+                    <span class="tip-number">🧭</span>
+                    <span><strong>Orquestrador</strong> — entende o pedido, planeja, delega e consolida a resposta final. Também gera PDF, fluxograma e busca na web.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">🗄️</span>
+                    <span><strong>Gerador SQL</strong> — escreve e executa consultas no Athena sobre as bases corporativas.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">📊</span>
+                    <span><strong>Analista de Dados</strong> — trabalha o dataset em sessão: filtra, agrupa, conta, transforma e exporta.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">🔬</span>
+                    <span><strong>Cientista de Dados</strong> — clusterização, PCA, detecção de outliers e avaliação estatística.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">📄</span>
+                    <span><strong>Analista de Documentos</strong> — lê, busca e extrai tabelas de PDFs, DOCX e imagens.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">🤝</span>
+                    <span><strong>Agente da sessão</strong> — um especialista sob medida que você mesmo configura para uma conversa específica.</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── Trabalhando com seus dados ─────────────────────── -->
+        <section class="manual-section">
+            <div class="section-header">
+                <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                </svg>
+                <h2>Trabalhando com seus dados</h2>
+            </div>
+            <p>Você pode trazer dados de três formas — e o resultado vira o “dataset da conversa”, sobre o qual todos os agentes trabalham:</p>
+            <div class="tips-grid">
+                <div class="tip-item">
+                    <span class="tip-number">📎</span>
+                    <span><strong>Planilhas</strong> (CSV, XLSX): viram tabela para análise. Até 25 MB e 50.000 linhas por arquivo.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">📄</span>
+                    <span><strong>Documentos</strong> (PDF, DOCX, imagens): extraídos para texto com OCR, prontos para leitura e busca.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">🗄️</span>
+                    <span><strong>Consulta ao Athena</strong>: o resultado da query vira o dataset corrente, sem precisar exportar nada.</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── Dicas de bons pedidos ──────────────────────────── -->
+        <section class="manual-section">
+            <div class="section-header">
+                <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
+                </svg>
+                <h2>Dicas para bons resultados</h2>
+            </div>
+            <div class="tips-grid">
+                <div class="tip-item">
+                    <span class="tip-number">✓</span>
+                    <span>Seja específico: informe período, sistema, base, colunas de interesse e o formato de saída desejado.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">✓</span>
+                    <span>Diga o objetivo, não o passo a passo — o orquestrador escolhe as ferramentas certas.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">✓</span>
+                    <span>Peça a fonte: “cite de onde veio esse número” garante rastreabilidade da auditoria.</span>
+                </div>
+                <div class="tip-item">
+                    <span class="tip-number">✓</span>
+                    <span>Refine em etapas: comece com uma amostra pequena antes de rodar sobre a base inteira.</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── Configurações ──────────────────────────────────── -->
+        <section class="manual-section">
+            <div class="section-header">
+                <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                </svg>
+                <h2>Configurações</h2>
+            </div>
+            <p>Na página de <strong>Configurações</strong> você personaliza os agentes (prompt, modelo de IA e ferramentas habilitadas), define o limite de passos por resposta e cadastra Conhecimentos reutilizáveis. Também é onde você monta o <em>agente da sessão</em> quando precisa de um especialista sob medida.</p>
+        </section>
+
+        <!-- ─── Suporte ────────────────────────────────────────── -->
+        <section class="manual-section">
+            <div class="section-header">
+                <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <h2>Suporte</h2>
+            </div>
+            <p>Para dúvidas, sugestões ou problemas, entre em contato com a equipe de desenvolvimento. Você pode gerar um PDF deste manual pelo botão “Baixar PDF” no topo da página.</p>
+        </section>
+
+        <!-- ─── Como o sistema funciona (grafo) ────────────────── -->
+        <section class="manual-section">
+            <div class="section-header">
+                <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"></path>
+                    <circle cx="18" cy="18" r="3"></circle>
+                </svg>
+                <h2>Como o sistema funciona</h2>
+            </div>
+            <p>Do seu pedido até a resposta: o orquestrador entende, planeja e delega aos especialistas, que usam ferramentas sobre suas fontes de dados e devolvem uma resposta com os artefatos gerados.</p>
+            <div class="manual-graph" id="manual-graph">
+                <div class="mermaid-render" id="how-it-works-graph"></div>
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Gera o PDF da documentação via diálogo de impressão do navegador
+  // (Salvar como PDF). O print stylesheet em style.css cuida do visual.
+  document.addEventListener('DOMContentLoaded', function () {
+    const btn = document.getElementById('pdf-download-btn');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      const prev = document.title;
+      // O nome do arquivo sugerido no "Salvar como PDF" vem do title.
+      document.title = 'Manual - Multi-Agentes Auditoria';
+      window.print();
+      // Restaura após o diálogo (afterprint cobre cancelamento e conclusão).
+      const restore = function () {
+        document.title = prev;
+        window.removeEventListener('afterprint', restore);
+      };
+      window.addEventListener('afterprint', restore);
+      setTimeout(restore, 1000);
+    });
+  });
+
+  // Renderiza o grafo "Como o sistema funciona". O base.html carrega o
+  // mermaid com startOnLoad:false + tema já estilizado — então renderizamos
+  // sob demanda, como o chat.js faz com os fluxogramas.
+  document.addEventListener('DOMContentLoaded', async function () {
+    const target = document.getElementById('how-it-works-graph');
+    if (!target || !window.mermaid) return;
+
+    const graph = `{% verbatim %}
+flowchart TB
+    U([👤 Auditor]):::user
+
+    subgraph ORQ_L[" "]
+      ORQ{{"🧭 Orquestrador<br/>entende · planeja · delega"}}:::orq
+    end
+
+    U ==>|"pergunta ou upload"| ORQ
+
+    subgraph ESP["🤖 Agentes especialistas"]
+      direction LR
+      SQL["🗄️ Gerador SQL"]:::esp
+      AD["📊 Analista de Dados"]:::esp
+      CD["🔬 Cientista de Dados"]:::esp
+      DOC["📄 Analista de Documentos"]:::esp
+    end
+
+    ORQ ==> SQL & AD & CD & DOC
+
+    subgraph FONTES["☁️ Fontes de dados"]
+      direction LR
+      ATH[("Athena")]:::src
+      FILES[("Planilhas & Documentos")]:::src
+      KB[("Bases de Conhecimento")]:::src
+    end
+
+    SQL --> ATH
+    AD --> FILES
+    DOC --> FILES
+    CD --> FILES
+    ORQ -.->|"RAG"| KB
+
+    OUT["📈 Resposta + artefatos<br/>relatório · gráfico · PDF · fluxograma"]:::out
+    SQL & AD & CD & DOC ==> OUT
+    OUT ==>|"resultado"| U
+
+    classDef user fill:#0ea5e9,stroke:#0369a1,color:#fff,font-weight:600;
+    classDef orq fill:#4f46e5,stroke:#3730a3,color:#fff,font-weight:700;
+    classDef esp fill:#eef2ff,stroke:#6366f1,color:#1e1b4b,font-weight:600;
+    classDef src fill:#ecfeff,stroke:#06b6d4,color:#083344,font-weight:600;
+    classDef out fill:#f0fdf4,stroke:#22c55e,color:#14532d,font-weight:600;
+{% endverbatim %}`.trim();
+
+    try {
+      const { svg } = await window.mermaid.render('how-it-works-svg', graph);
+      target.innerHTML = svg;
+    } catch (e) {
+      target.innerHTML = '<pre class="mermaid-fallback">' + graph.replace(/</g, '&lt;') + '</pre>';
+    }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,207 @@
+<div class="pb-editor">
+  <!-- Cabeçalho: meta + ações -->
+  <header class="pb-ed-header">
+    <div class="pb-ed-meta">
+      <input class="pb-icon-input" [(ngModel)]="icon" maxlength="4" title="Ícone" />
+      <input class="pb-name-input" [(ngModel)]="name" placeholder="Nome do playbook" />
+      <input class="pb-desc-input" [(ngModel)]="description" placeholder="Descrição curta (opcional)" />
+    </div>
+    <div class="pb-ed-actions">
+      <span class="pb-status" *ngIf="status">{{ status }}</span>
+      <button class="pb-btn ghost" (click)="triggerImport()" title="Importar playbook de um arquivo .json">📥 Importar</button>
+      <button class="pb-btn ghost" (click)="exportJson()" title="Exportar este playbook como .json">⬇️ Exportar</button>
+      <button class="pb-btn ghost" (click)="close()">Voltar</button>
+      <button class="pb-btn primary" [disabled]="saving" (click)="save()">💾 Salvar</button>
+    </div>
+    <!-- Input escondido usado pelo Importar -->
+    <input
+      #fileInput
+      type="file"
+      accept="application/json,.json"
+      hidden
+      (change)="onImportFile($event)"
+    />
+  </header>
+
+  <div class="pb-ed-tabs">
+    <button [class.active]="tab === 'canvas'" (click)="tab = 'canvas'">🕸️ Orquestração</button>
+    <button [class.active]="tab === 'suggestions'" (click)="tab = 'suggestions'">
+      💡 Sugestões ({{ suggestions.length }})
+    </button>
+  </div>
+
+  <div class="pb-warnings" *ngIf="warnings.length">
+    <div class="pb-warn" *ngFor="let w of warnings">⚠️ {{ w }}</div>
+  </div>
+
+  <div class="pb-loading" *ngIf="loading">Carregando…</div>
+
+  <!-- ── Aba canvas ────────────────────────────────────────────────── -->
+  <div class="pb-ed-body" *ngIf="!loading && tab === 'canvas'">
+    <!-- Canvas -->
+    <div class="pb-canvas-wrap">
+      <div class="pb-canvas-hint" *ngIf="linkingFrom">
+        🔗 Ligando de <strong>{{ nodeName(linkingFrom) }}</strong> — clique no agente de destino
+        (ou no vazio para cancelar).
+      </div>
+      <div
+        class="pb-canvas"
+        [class.panning]="panning"
+        #canvas
+        [style.backgroundPosition]="gridPosition"
+        [style.backgroundSize]="gridSize"
+        (mousedown)="onCanvasMouseDown($event)"
+        (mousemove)="onCanvasMouseMove($event)"
+        (mouseup)="onCanvasMouseUp()"
+        (mouseleave)="onCanvasMouseUp()"
+        (click)="onCanvasClick()"
+        (wheel)="onCanvasWheel($event)"
+      >
+        <!-- Mundo transformável (zoom + pan) -->
+        <div class="pb-canvas-world" [style.transform]="worldTransform">
+          <!-- Arestas (SVG por baixo dos nós) -->
+          <svg class="pb-edges">
+            <defs>
+            <marker id="pb-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)" />
+              </marker>
+            </defs>
+            <path
+              *ngFor="let e of edges; trackBy: trackEdge"
+              [attr.d]="edgePath(e)"
+              class="pb-edge-path"
+              marker-end="url(#pb-arrow)"
+            />
+          </svg>
+
+          <!-- Rótulos de aresta (remover) -->
+          <button
+            *ngFor="let e of edges; trackBy: trackEdge"
+            class="pb-edge-del"
+            [style.left.px]="edgeMid(e).x"
+            [style.top.px]="edgeMid(e).y"
+            title="Remover conexão"
+            (click)="removeEdge(e); $event.stopPropagation()"
+          >×</button>
+
+          <!-- Nós -->
+          <div
+            *ngFor="let n of nodes; trackBy: trackNode"
+            class="pb-node"
+            [class.root]="n.is_root"
+            [class.selected]="n.id === selectedId"
+            [class.link-target]="linkingFrom && linkingFrom !== n.id"
+            [style.left.px]="n.canvas.x"
+            [style.top.px]="n.canvas.y"
+            (mousedown)="onNodeMouseDown($event, n)"
+            (click)="selectNode(n); $event.stopPropagation()"
+          >
+            <div class="pb-node-head">
+              <span class="pb-node-icon">{{ n.icon }}</span>
+              <span class="pb-node-name">{{ n.name }}</span>
+              <span class="pb-node-badge" *ngIf="n.is_root">root</span>
+            </div>
+            <div class="pb-node-model">{{ n.model }} · {{ n.tools_enabled.length }} tools</div>
+            <!-- Porta de saída: inicia uma ligação -->
+            <button
+              class="pb-node-port"
+              title="Arraste uma conexão a partir daqui"
+              (mousedown)="$event.stopPropagation()"
+              (click)="startLink($event, n)"
+            >＋</button>
+          </div>
+        </div>
+
+        <!-- Controles de zoom -->
+        <div class="pb-zoom-controls">
+          <button class="pb-zoom-btn" (click)="zoomBy(1 / 1.2); $event.stopPropagation()" title="Diminuir">−</button>
+          <span class="pb-zoom-level" title="Zoom atual">{{ zoomPct }}%</span>
+          <button class="pb-zoom-btn" (click)="zoomBy(1.2); $event.stopPropagation()" title="Aumentar">+</button>
+          <button class="pb-zoom-btn" (click)="fitView(); $event.stopPropagation()" title="Ajustar à tela">⤢</button>
+        </div>
+      </div>
+      <div class="pb-canvas-toolbar">
+        <button class="pb-btn ghost" (click)="addNode()">➕ Adicionar agente</button>
+        <span class="pb-hint">Arraste os cards para posicionar · ＋ na borda cria conexão · scroll = zoom · arraste o fundo = mover a tela</span>
+      </div>
+    </div>
+
+    <!-- Painel do nó selecionado -->
+    <aside class="pb-node-panel" *ngIf="selected as n; else noSel">
+      <div class="pb-panel-row">
+        <input class="pb-panel-icon" [(ngModel)]="n.icon" maxlength="4" />
+        <input class="pb-panel-name" [(ngModel)]="n.name" placeholder="Nome do agente" />
+      </div>
+
+      <label class="pb-field">
+        <span>Descrição (o que ele faz — ajuda o orquestrador a delegar)</span>
+        <input [(ngModel)]="n.description" placeholder="Ex.: escreve e executa SQL na base FQ" />
+      </label>
+
+      <label class="pb-field">
+        <span>Prompt do sistema</span>
+        <textarea rows="7" [(ngModel)]="n.system_prompt" placeholder="Instruções do agente…"></textarea>
+      </label>
+
+      <div class="pb-field-grid">
+        <label class="pb-field">
+          <span>Modelo</span>
+          <select [(ngModel)]="n.model">
+            <option *ngFor="let m of models" [value]="m">{{ m }}</option>
+          </select>
+        </label>
+        <label class="pb-field">
+          <span>Temperatura: {{ n.temperature }}</span>
+          <input type="range" min="0" max="2" step="0.1" [(ngModel)]="n.temperature" />
+        </label>
+      </div>
+
+      <div class="pb-field">
+        <span>Ferramentas</span>
+        <div class="pb-tools">
+          <label class="pb-tool" *ngFor="let t of tools; trackBy: trackTool"
+                 [title]="t.description">
+            <input type="checkbox" [checked]="isToolOn(n, t.slug)" (change)="toggleTool(n, t.slug)" />
+            <span>{{ t.icon }} {{ t.name }}</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="pb-field" *ngIf="outgoingOf(n.id!).length">
+        <span>Pode delegar para</span>
+        <div class="pb-out-edges">
+          <span class="pb-out-edge" *ngFor="let e of outgoingOf(n.id!); trackBy: trackEdge">
+            → {{ nodeName(e.target) }}
+            <button (click)="removeEdge(e)" title="Remover">×</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="pb-panel-actions">
+        <button class="pb-btn ghost" *ngIf="!n.is_root" (click)="makeRoot(n)">⭐ Tornar root</button>
+        <button class="pb-btn danger" *ngIf="!n.is_root" (click)="removeNode(n)">🗑️ Remover</button>
+      </div>
+    </aside>
+    <ng-template #noSel>
+      <aside class="pb-node-panel empty">
+        <p>Selecione um agente no canvas para editar o prompt, o modelo e as ferramentas.</p>
+      </aside>
+    </ng-template>
+  </div>
+
+  <!-- ── Aba sugestões ─────────────────────────────────────────────── -->
+  <div class="pb-ed-body suggestions" *ngIf="!loading && tab === 'suggestions'">
+    <div class="pb-sug-intro">
+      Textos pré-programados que aparecem como cards na tela de boas-vindas do chat
+      quando este playbook está selecionado.
+    </div>
+    <div class="pb-sug-list">
+      <div class="pb-sug-card" *ngFor="let s of suggestions; let i = index">
+        <input class="pb-sug-title" [(ngModel)]="s.title" placeholder="Título (ex.: 🔥 Caso crítico)" />
+        <textarea class="pb-sug-text" rows="2" [(ngModel)]="s.text" placeholder="Texto que preenche o campo de mensagem…"></textarea>
+        <button class="pb-btn danger sm" (click)="removeSuggestion(i)">Remover</button>
+      </div>
+    </div>
+    <button class="pb-btn ghost" (click)="addSuggestion()">➕ Adicionar sugestão</button>
+  </div>
+</div>

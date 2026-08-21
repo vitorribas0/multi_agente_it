@@ -1,0 +1,48 @@
+<!-- Editor aberto: ocupa toda a tela -->
+<app-playbook-editor
+  *ngIf="editing; else listView"
+  [playbookId]="editing.id"
+  (closed)="onEditorClosed()"
+  (saved)="onEditorSaved()"
+></app-playbook-editor>
+
+<ng-template #listView>
+  <div class="pb-page">
+    <header class="pb-page-header">
+      <div>
+        <h1 class="pb-page-title">📐 Playbooks</h1>
+        <p class="pb-page-sub">
+          Pipelines multi-agente configuráveis. Desenhe uma árvore de orquestração no canvas,
+          defina prompts, modelos e ferramentas por agente — e selecione o playbook no chat para
+          conversar só com ele.
+        </p>
+      </div>
+      <button class="pb-btn primary" (click)="createNew()">➕ Novo playbook</button>
+    </header>
+
+    <div class="pb-loading" *ngIf="loading">Carregando…</div>
+
+    <div class="pb-empty" *ngIf="!loading && !playbooks.length">
+      <div class="pb-empty-icon">📐</div>
+      <p>Nenhum playbook ainda.</p>
+      <button class="pb-btn primary" (click)="createNew()">Criar o primeiro</button>
+    </div>
+
+    <div class="pb-grid" *ngIf="!loading && playbooks.length">
+      <div class="pb-card" *ngFor="let pb of playbooks; trackBy: trackPb" (click)="edit(pb)">
+        <div class="pb-card-head">
+          <span class="pb-card-icon">{{ pb.icon }}</span>
+          <span class="pb-card-name">{{ pb.name }}</span>
+        </div>
+        <p class="pb-card-desc">{{ pb.description || 'Sem descrição.' }}</p>
+        <div class="pb-card-foot">
+          <span class="pb-card-count">🕸️ {{ pb.node_count }} agente(s)</span>
+          <div class="pb-card-actions">
+            <button class="pb-btn sm ghost" (click)="edit(pb); $event.stopPropagation()">Editar</button>
+            <button class="pb-btn sm danger" (click)="remove(pb); $event.stopPropagation()">Excluir</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</ng-template>

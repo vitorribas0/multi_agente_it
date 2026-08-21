@@ -1,0 +1,96 @@
+.pb-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px 32px;
+  gap: 24px;
+}
+
+.pb-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+.pb-page-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 6px;
+}
+.pb-page-sub {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 640px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.pb-btn {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 9px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.pb-btn:hover { color: var(--text-primary); border-color: var(--accent); }
+.pb-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pb-btn.primary:hover { background: var(--accent-hover); }
+.pb-btn.danger { color: var(--danger); }
+.pb-btn.danger:hover { border-color: var(--danger); }
+.pb-btn.ghost { background: transparent; }
+.pb-btn.sm { padding: 4px 10px; font-size: 12px; }
+
+.pb-loading { color: var(--text-muted); padding: 40px 0; }
+
+.pb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 60px 0;
+  color: var(--text-secondary);
+}
+.pb-empty-icon { font-size: 44px; opacity: 0.7; }
+
+.pb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.pb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.pb-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.pb-card-head { display: flex; align-items: center; gap: 10px; }
+.pb-card-icon { font-size: 22px; }
+.pb-card-name { font-weight: 600; font-size: 15px; color: var(--text-primary); }
+.pb-card-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+  min-height: 36px;
+}
+.pb-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+}
+.pb-card-count { font-size: 12px; color: var(--text-muted); }
+.pb-card-actions { display: flex; gap: 6px; }

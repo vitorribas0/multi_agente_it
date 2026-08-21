@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Django
+*.log
+db.sqlite3
+db.sqlite3-journal
+/media
+/staticfiles
+/exports
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+.claude/settings.local.json
+.ipynb_checkpoints/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Certificados e arquivos de suporte sensíveis
+arquivos_suporte/*.pem
+arquivos_suporte/*.crt
+arquivos_suporte/*.key
+
+# Modelos do docling (~506 MB, baixados manualmente — ver README)
+arquivos_suporte/docling/

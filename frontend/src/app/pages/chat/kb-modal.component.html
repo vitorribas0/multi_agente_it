@@ -1,0 +1,68 @@
+<div class="sa-modal-backdrop" [hidden]="!open" (click)="close()">
+  <div class="sa-modal" role="dialog" aria-modal="true" (click)="$event.stopPropagation()">
+    <div class="sa-modal-header">
+      <div class="sa-modal-titlewrap">
+        <span class="sa-modal-badge kb-modal-badge">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+          </svg>
+        </span>
+        <div>
+          <h2 class="sa-modal-title">Bases de conhecimento</h2>
+          <p class="sa-modal-sub kb-modal-sub">Selecione até 10 — o agente consulta quando a pergunta exigir</p>
+        </div>
+      </div>
+      <button class="sa-modal-close" type="button" (click)="close()" title="Fechar (Esc)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="sa-modal-body">
+      <div class="sa-field">
+        <label for="kb-search">Buscar base</label>
+        <input type="text" id="kb-search" placeholder="Buscar por nome ou descrição…" [(ngModel)]="search" />
+      </div>
+      <div class="sa-field">
+        <label>Bases disponíveis <span class="sa-tools-count">{{ count }} selecionada(s)</span></label>
+        <div class="kb-list">
+          <div class="kb-empty" *ngIf="loading">Carregando…</div>
+          <div class="kb-empty" *ngIf="!loading && !filtered.length">Nenhuma base encontrada.</div>
+          <table class="kb-table" *ngIf="!loading && filtered.length">
+            <thead>
+              <tr>
+                <th></th>
+                <th>Nome</th>
+                <th>Descrição</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let kb of filtered"
+                  class="kb-row"
+                  [class.selected]="isSelected(kb.id)"
+                  [class.disabled]="isDisabled(kb.id)"
+                  (click)="!isDisabled(kb.id) && toggle(kb)">
+                <td class="kb-cell-check">
+                  <input type="checkbox" [checked]="isSelected(kb.id)" [disabled]="isDisabled(kb.id)"
+                         (click)="$event.preventDefault()" />
+                </td>
+                <td class="kb-cell-name">{{ kb.name }}</td>
+                <td class="kb-cell-desc" [title]="kb.description">{{ kb.description }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="sa-modal-footer">
+      <div class="sa-footer-left">
+        <button class="sa-btn ghost" type="button" (click)="clear()">Limpar seleção</button>
+      </div>
+      <div class="sa-footer-right">
+        <button class="sa-btn ghost" type="button" (click)="close()">Cancelar</button>
+        <button class="sa-btn primary" type="button" (click)="onSave()">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
