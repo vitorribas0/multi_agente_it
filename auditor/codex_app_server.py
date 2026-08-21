@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Iterator
@@ -34,15 +35,24 @@ class CodexAppServerError(RuntimeError):
 
 _DEVELOPER_INSTRUCTIONS = (
     "Atue como assistente de auditoria. Responda em português do Brasil e use "
-    "as skills do repositório quando forem pertinentes. Não altere arquivos do "
-    "projeto durante este chat. Converse naturalmente em saudações e perguntas "
+    "as skills do repositório quando forem pertinentes. O diretório de trabalho "
+    "é a área isolada de artefatos desta conversa: quando o usuário pedir um "
+    "arquivo, crie de fato o arquivo final diretamente nesse diretório, em vez "
+    "de apenas mostrar código ou instruções. Você pode gerar XLSX, CSV, PDF e "
+    "HTML. Para planilhas, siga a skill Spreadsheets e use o @oai/artifact-tool; "
+    "o node_modules e o container_tools oficiais já estão disponíveis no diretório "
+    "atual. Não use openpyxl, xlsxwriter ou pandas.ExcelWriter. Não altere arquivos "
+    "fora do diretório atual. Os dados de entrada da sessão, quando existirem, "
+    "podem ser localizados em ../manifesto_sessao.json e são somente leitura. "
+    "Converse naturalmente em saudações e perguntas "
     "gerais. Não mencione diretório de trabalho, manifesto, nomes de arquivos "
     "internos, sandbox ou infraestrutura, salvo quando o usuário perguntar ou "
     "quando isso for indispensável para explicar uma análise solicitada. Só "
     "inspecione os arquivos da sessão quando o pedido envolver dados anexados. "
     "Quando o usuário pedir relatório ou dashboard HTML, entregue um documento "
-    "HTML completo, standalone e sem recursos externos após um resumo curto; a "
-    "aplicação converterá o documento automaticamente em artefato visualizável. "
+    "HTML completo, standalone e sem recursos externos, salve o .html no diretório "
+    "atual e responda com um resumo curto; a aplicação publicará o arquivo como "
+    "artefato visualizável. "
     "Quando o pedido for para alterar, ampliar ou continuar um HTML já criado, "
     "reescreva e devolva o documento HTML completo atualizado. Nunca responda com "
     "CSS isolado, fragmentos, diffs ou instruções de edição manual."
@@ -55,6 +65,33 @@ class CodexAppServer:
         if not executable:
             raise CodexAppServerError("Executável 'codex' não encontrado no PATH.")
         self.cwd = cwd.resolve()
+        runtime_root = (
+            Path.home() / ".cache" / "codex-runtimes" / "codex-primary-runtime"
+        )
+        dependencies = runtime_root / "dependencies"
+        node_bin = dependencies / "node" / "bin"
+        node_modules = dependencies / "node" / "node_modules"
+        bundled_python = dependencies / "python" / "bin" / "python3"
+        spreadsheet_tools = (
+            runtime_root
+            / "plugins"
+            / "openai-primary-runtime"
+            / "plugins"
+            / "spreadsheets"
+            / "skills"
+            / "spreadsheets"
+            / "container_tools"
+        )
+        self._ensure_runtime_link("node_modules", node_modules)
+        self._ensure_runtime_link("container_tools", spreadsheet_tools)
+        process_env = os.environ.copy()
+        if node_bin.is_dir():
+            process_env["PATH"] = f"{node_bin}{os.pathsep}{process_env.get('PATH', '')}"
+        if node_modules.is_dir():
+            process_env["NODE_PATH"] = str(node_modules)
+        process_env["AUDITOR_ARTIFACT_PYTHON"] = str(
+            bundled_python if bundled_python.is_file() else Path(sys.executable)
+        )
         self.process = subprocess.Popen(
             [executable, "app-server", "--stdio"],
             cwd=str(self.cwd),
@@ -63,10 +100,27 @@ class CodexAppServer:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            env=os.environ.copy(),
+            env=process_env,
         )
         self._stderr: list[str] = []
         threading.Thread(target=self._drain_stderr, daemon=True).start()
+
+    def _ensure_runtime_link(self, name: str, target: Path) -> None:
+        """Expõe dependências oficiais no workspace sem copiá-las ou alterá-las."""
+        if not target.is_dir():
+            return
+        link = self.cwd / name
+        if link.exists():
+            return
+        if link.is_symlink():
+            try:
+                link.unlink()
+            except OSError:
+                return
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError:
+            pass
 
     def _drain_stderr(self) -> None:
         if not self.process.stderr:
@@ -131,7 +185,7 @@ class CodexAppServer:
                     "threadId": thread_id,
                     "cwd": str(self.cwd),
                     "approvalPolicy": "never",
-                    "sandbox": "read-only",
+                    "sandbox": "workspace-write",
                     "developerInstructions": _DEVELOPER_INSTRUCTIONS,
                 },
             })
@@ -148,7 +202,7 @@ class CodexAppServer:
             "params": {
                 "cwd": str(self.cwd),
                 "approvalPolicy": "never",
-                "sandbox": "read-only",
+                "sandbox": "workspace-write",
                 "developerInstructions": _DEVELOPER_INSTRUCTIONS,
             },
         })
@@ -165,6 +219,13 @@ class CodexAppServer:
             "params": {
                 "threadId": thread_id,
                 "input": [{"type": "text", "text": prompt}],
+                "cwd": str(self.cwd),
+                "approvalPolicy": "never",
+                "sandboxPolicy": {
+                    "type": "workspaceWrite",
+                    "writableRoots": [str(self.cwd)],
+                    "networkAccess": False,
+                },
             },
         })
 

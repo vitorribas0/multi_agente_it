@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -5,10 +6,14 @@ from django.test import SimpleTestCase, TestCase, override_settings
 
 from .codex_app_server import CodexAppServer
 from .codex_views import (
+    _artifact_snapshot,
     _codex_trace_record,
+    _collect_generated_artifacts,
     _is_html_revision_request,
+    _prepare_session_workspace,
     _prompt_with_history,
     _split_html_response,
+    _strip_codex_file_citations,
 )
 from .models import Conversation, Message
 
@@ -16,6 +21,7 @@ from .models import Conversation, Message
 class CodexAppServerEventTests(SimpleTestCase):
     def test_streams_complete_activity_lifecycle_and_command_output(self):
         client = object.__new__(CodexAppServer)
+        client.cwd = Path("/tmp/chat/artefatos")
         sent = []
         client._send = lambda payload: sent.append(payload)
         client._messages = lambda: iter([
@@ -55,6 +61,12 @@ class CodexAppServerEventTests(SimpleTestCase):
         events = list(client.turn("thread-1", "analise"))
 
         self.assertEqual(sent[0]["method"], "turn/start")
+        self.assertEqual(sent[0]["params"]["sandboxPolicy"]["type"], "workspaceWrite")
+        self.assertEqual(
+            sent[0]["params"]["sandboxPolicy"]["writableRoots"],
+            ["/tmp/chat/artefatos"],
+        )
+        self.assertFalse(sent[0]["params"]["sandboxPolicy"]["networkAccess"])
         self.assertEqual(events[0]["phase"], "started")
         self.assertEqual(events[0]["item"]["id"], "cmd-1")
         self.assertEqual(events[1]["type"], "activity_output")
@@ -157,3 +169,71 @@ class CodexHtmlRevisionPromptTests(TestCase):
         self.assertIn("documento HTML completo", prompt)
         self.assertIn("Não devolva CSS isolado", prompt)
         self.assertTrue(prompt.endswith("para inserir ou substituir trechos."))
+
+
+class CodexGeneratedArtifactTests(TestCase):
+    def test_strips_internal_file_citation_from_visible_answer(self):
+        answer = (
+            "Planilha criada. "
+            ':codex-file-citation{path="/tmp/planilha.xlsx" purpose="output"}'
+        )
+
+        self.assertEqual(_strip_codex_file_citations(answer), "Planilha criada.")
+
+    def test_publishes_new_excel_and_keeps_it_in_chat_workspace(self):
+        from openpyxl import Workbook
+
+        with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
+            artifacts_dir = Path(temp_dir) / "runtime" / "codex_sessions" / "7" / "artefatos"
+            before = _artifact_snapshot(artifacts_dir)
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Resumo"
+            sheet.append(["Mês", "Valor"])
+            sheet.append(["Janeiro", 100])
+            sheet.append(["Fevereiro", 120])
+            generated = artifacts_dir / "orcamento.xlsx"
+            workbook.save(generated)
+
+            attachments = _collect_generated_artifacts(artifacts_dir, before, 7)
+
+            self.assertTrue(generated.exists())
+            self.assertEqual(len(attachments), 1)
+            attachment = attachments[0]
+            self.assertEqual(attachment["kind"], "export")
+            self.assertEqual(attachment["formato"], "xlsx")
+            self.assertEqual(attachment["filename"], "orcamento.xlsx")
+            self.assertEqual(attachment["linhas"], 2)
+            self.assertEqual(attachment["colunas"], 2)
+            self.assertEqual(attachment["abas"], ["Resumo"])
+            exported = Path(temp_dir) / "exports" / Path(attachment["download_url"]).name
+            self.assertTrue(exported.exists())
+
+    def test_does_not_republish_unchanged_artifact(self):
+        with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
+            artifacts_dir = Path(temp_dir) / "artefatos"
+            artifacts_dir.mkdir()
+            (artifacts_dir / "dados.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+            before = _artifact_snapshot(artifacts_dir)
+
+            attachments = _collect_generated_artifacts(artifacts_dir, before, 8)
+
+            self.assertEqual(attachments, [])
+
+    def test_manifest_lists_generated_artifacts(self):
+        with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
+            conv = Conversation.objects.create(title="Artefatos")
+            workspace = Path(temp_dir) / "runtime" / "codex_sessions" / str(conv.id)
+            artifacts_dir = workspace / "artefatos"
+            artifacts_dir.mkdir(parents=True)
+            (artifacts_dir / "resultado.csv").write_text("id\n1\n", encoding="utf-8")
+
+            _prepare_session_workspace(conv)
+
+            manifest = json.loads(
+                (workspace / "manifesto_sessao.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                manifest["artefatos_gerados"][0]["arquivo"],
+                "artefatos/resultado.csv",
+            )

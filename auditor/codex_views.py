@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import queue
 import re
+import shutil
 import threading
 import time
 import unicodedata
 from pathlib import Path
+from uuid import uuid4
 
 from django.conf import settings
 from django.http import JsonResponse, StreamingHttpResponse
@@ -23,6 +26,10 @@ from tools.gerar_html import gerar_html
 
 _HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _HTML_EXPORT_PREFIX = "/api/exports/"
+_ARTIFACTS_DIRNAME = "artefatos"
+_GENERATED_ARTIFACT_EXTENSIONS = {".csv", ".xlsx", ".pdf", ".html", ".htm"}
+_MAX_GENERATED_ARTIFACT_BYTES = 200 * 1024 * 1024
+_MAX_GENERATED_ARTIFACTS_PER_TURN = 20
 _TRACE_TEXT_LIMIT = 6000
 _TRACE_RESULT_PREVIEW_LIMIT = 1200
 _TRACE_META = {
@@ -189,6 +196,170 @@ def _codex_trace_record(item: dict, streamed_output: str = "", elapsed_ms: int =
     }
 
 
+def _artifact_snapshot(artifacts_dir: Path) -> dict[str, tuple[int, int]]:
+    """Fotografa somente formatos publicáveis antes de iniciar o turno."""
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in artifacts_dir.rglob("*"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path.suffix.lower() not in _GENERATED_ARTIFACT_EXTENSIONS:
+            continue
+        try:
+            stat = path.stat()
+            relative = str(path.relative_to(artifacts_dir))
+        except (OSError, ValueError):
+            continue
+        snapshot[relative] = (stat.st_mtime_ns, stat.st_size)
+    return snapshot
+
+
+def _csv_dimensions(path: Path) -> tuple[int | None, int | None]:
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+            sample = handle.read(8192)
+            handle.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+            except csv.Error:
+                dialect = csv.excel
+            reader = csv.reader(handle, dialect)
+            header = next(reader, [])
+            rows = sum(1 for _ in reader)
+        return rows, len(header)
+    except (OSError, UnicodeError, csv.Error):
+        return None, None
+
+
+def _xlsx_dimensions(path: Path) -> tuple[int | None, int | None, list[str]]:
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.utils.cell import range_boundaries
+
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        sheets = list(workbook.sheetnames)
+        dimensions: list[tuple[int, int]] = []
+        for sheet in workbook.worksheets:
+            max_row = sheet.max_row
+            max_column = sheet.max_column
+            if max_row is None or max_column is None:
+                try:
+                    _min_col, _min_row, max_column, max_row = range_boundaries(
+                        sheet.calculate_dimension(force=True)
+                    )
+                except (TypeError, ValueError):
+                    max_row, max_column = 0, 0
+            dimensions.append((max_row or 0, max_column or 0))
+        rows = sum(max(0, max_row - 1) for max_row, _max_column in dimensions)
+        columns = max((max_column for _max_row, max_column in dimensions), default=0)
+        workbook.close()
+        return rows, columns, sheets[:30]
+    except Exception:
+        return None, None, []
+
+
+def _pdf_pages(path: Path) -> int | None:
+    try:
+        from pypdf import PdfReader
+
+        return len(PdfReader(str(path)).pages)
+    except Exception:
+        return None
+
+
+def _generated_artifact_attachment(path: Path, conversation_id: int) -> dict | None:
+    """Copia um artefato da caixa do chat para exports/ e cria seu card."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size <= 0 or size > _MAX_GENERATED_ARTIFACT_BYTES:
+        return None
+
+    source_suffix = path.suffix.lower()
+    if source_suffix not in _GENERATED_ARTIFACT_EXTENSIONS:
+        return None
+    formato = "html" if source_suffix == ".htm" else source_suffix.lstrip(".")
+    safe_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", path.stem).strip("_")[:50]
+    safe_stem = safe_stem or "artefato"
+    export_filename = f"codex_c{conversation_id}_{safe_stem}_{uuid4().hex[:8]}.{formato}"
+    export_dir = Path(settings.BASE_DIR) / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    export_path = export_dir / export_filename
+    try:
+        shutil.copy2(path, export_path)
+    except OSError:
+        return None
+
+    payload: dict = {
+        "kind": "export",
+        "ok": True,
+        "filename": path.name,
+        "download_url": f"{_HTML_EXPORT_PREFIX}{export_filename}",
+        "formato": formato,
+        "titulo": path.stem,
+        "size_kb": round(size / 1024, 1),
+    }
+    if formato == "csv":
+        payload["linhas"], payload["colunas"] = _csv_dimensions(path)
+    elif formato == "xlsx":
+        rows, columns, sheets = _xlsx_dimensions(path)
+        payload.update({"linhas": rows, "colunas": columns, "abas": sheets})
+    elif formato == "pdf":
+        payload["paginas"] = _pdf_pages(path)
+    return payload
+
+
+def _collect_generated_artifacts(
+    artifacts_dir: Path,
+    before: dict[str, tuple[int, int]],
+    conversation_id: int,
+) -> list[dict]:
+    """Publica arquivos novos ou alterados pelo Codex durante o turno."""
+    root = artifacts_dir.resolve()
+    changed: list[tuple[int, str, Path]] = []
+    for path in artifacts_dir.rglob("*"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path.suffix.lower() not in _GENERATED_ARTIFACT_EXTENSIONS:
+            continue
+        try:
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(root)
+            stat = resolved.stat()
+            relative = str(resolved.relative_to(root))
+        except (OSError, ValueError):
+            continue
+        signature = (stat.st_mtime_ns, stat.st_size)
+        if before.get(relative) != signature:
+            changed.append((stat.st_mtime_ns, relative, resolved))
+
+    attachments: list[dict] = []
+    for _mtime, _relative, path in sorted(changed)[:_MAX_GENERATED_ARTIFACTS_PER_TURN]:
+        attachment = _generated_artifact_attachment(path, conversation_id)
+        if attachment:
+            attachments.append(attachment)
+    return attachments
+
+
+def _generated_artifacts_manifest(workspace: Path) -> list[dict]:
+    artifacts_dir = workspace / _ARTIFACTS_DIRNAME
+    items: list[dict] = []
+    for relative, (_mtime, size) in sorted(_artifact_snapshot(artifacts_dir).items()):
+        items.append({
+            "arquivo": str(Path(_ARTIFACTS_DIRNAME) / relative),
+            "formato": Path(relative).suffix.lower().lstrip("."),
+            "tamanho_bytes": size,
+        })
+    return items
+
+
+def _strip_codex_file_citations(answer: str) -> str:
+    """O frontend já renderiza o card; remove a diretiva interna do Codex."""
+    cleaned = re.sub(r":codex-file-citation\{[^{}]*\}", "", answer)
+    return re.sub(r"[ \t]+(?=\n|$)", "", cleaned).strip()
+
+
 def _split_html_response(answer: str) -> tuple[str, str | None]:
     """Separa texto explicativo de um documento HTML completo retornado inline."""
     lowered = answer.lower()
@@ -303,10 +474,11 @@ def _revision_output_requirement() -> str:
 
 
 def _prepare_session_workspace(conv) -> Path:
-    """Materializa datasets do Django como arquivos legíveis pelo sandbox."""
+    """Materializa entradas e mantém a caixa isolada de artefatos do chat."""
     workspace = Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conv.id)
     datasets_dir = workspace / "datasets_nomeados"
     datasets_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / _ARTIFACTS_DIRNAME).mkdir(parents=True, exist_ok=True)
 
     state = conv.state or {}
     manifest = {
@@ -316,6 +488,7 @@ def _prepare_session_workspace(conv) -> Path:
         "workbooks": state.get("excel_workbooks") or {},
         "dataset_atual": None,
         "datasets_nomeados": {},
+        "artefatos_gerados": _generated_artifacts_manifest(workspace),
     }
     current = state.get("athena_last_result")
     if current is not None:
@@ -338,17 +511,23 @@ def _prepare_session_workspace(conv) -> Path:
 
 def _prompt_with_history(conv, text: str, has_codex_thread: bool) -> str:
     state = conv.state or {}
+    artifacts_dir = (
+        Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conv.id) / _ARTIFACTS_DIRNAME
+    )
+    has_generated_artifacts = bool(_artifact_snapshot(artifacts_dir))
     has_attached_data = any((
         state.get("athena_last_result") is not None,
         bool(state.get("named_datasets")),
         bool(state.get("excel_workbooks")),
+        has_generated_artifacts,
     ))
     hints: list[str] = []
     if has_attached_data:
         hints.append(
             "Há dados anexados disponíveis na sessão. Somente se o pedido atual "
-            "exigir esses dados, consulte manifesto_sessao.json para localizar o "
-            "dataset atual e as abas/datasets nomeados. Não mencione essa estrutura "
+            "exigir esses dados, consulte ../manifesto_sessao.json para localizar o "
+            "dataset atual, as abas/datasets nomeados e os artefatos já gerados. "
+            "Não mencione essa estrutura "
             "interna na resposta; apresente apenas a análise e suas evidências."
         )
 
@@ -387,7 +566,7 @@ def codex_status(_request):
     return JsonResponse({
         "status": "ready" if which("codex") else "unavailable",
         "engine": "codex-app-server",
-        "sandbox": "read-only",
+        "sandbox": "workspace-write-isolado",
         "skills": [
             "auditoria-interna",
             "aws-athena",
@@ -435,7 +614,9 @@ def codex_chat_stream(request):
         trace_completed: set[str] = set()
         try:
             session_workspace = _prepare_session_workspace(conv)
-            with CodexAppServer(session_workspace) as client:
+            artifacts_dir = session_workspace / _ARTIFACTS_DIRNAME
+            artifacts_before = _artifact_snapshot(artifacts_dir)
+            with CodexAppServer(artifacts_dir) as client:
                 events.put({"type": "progress", "stage": "thinking", "icon": "◈", "text": "Conectando ao Codex App Server"})
                 client.initialize()
                 thread_id = client.open_thread(old_thread_id)
@@ -443,7 +624,7 @@ def codex_chat_stream(request):
                 state["chat_engine"] = "codex-app-server"
                 conv.state = state
                 conv.save(update_fields=["state", "updated_at"])
-                events.put({"type": "progress", "stage": "thinking", "icon": "🛡️", "text": "Sandbox somente leitura · skills de auditoria carregadas"})
+                events.put({"type": "progress", "stage": "thinking", "icon": "🛡️", "text": "Sandbox isolado · escrita restrita aos artefatos deste chat"})
 
                 def collect_turn(turn_prompt: str) -> str:
                     parts: list[str] = []
@@ -554,7 +735,17 @@ def codex_chat_stream(request):
             answer = "".join(answer_parts).strip()
             if not answer:
                 answer = "O Codex concluiu o turno sem produzir uma mensagem de texto."
-            answer, attachments = _materialize_html_response(answer)
+            generated_attachments = _collect_generated_artifacts(
+                artifacts_dir,
+                artifacts_before,
+                conv.id,
+            )
+            # Atualiza o índice da sessão depois que os arquivos finais existem.
+            _prepare_session_workspace(conv)
+            if generated_attachments:
+                answer = _strip_codex_file_citations(answer)
+            answer, html_attachments = _materialize_html_response(answer)
+            attachments = generated_attachments + html_attachments
             assistant = Message.objects.create(
                 conversation=conv,
                 role="assistant",
