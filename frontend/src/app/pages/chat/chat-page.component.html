@@ -114,10 +114,16 @@
       <div class="msg-content-wrap">
         <div class="msg-author">{{ m.role === 'user' ? 'Você' : 'Multi-Agentes Auditoria' }}</div>
 
-        <!-- Árvore de tool-calls (o que o agente fez neste turno) -->
-        <div class="tool-calls-group" *ngIf="(m.tool_calls || []).length">
-          <app-tool-call *ngFor="let tc of m.tool_calls" [tc]="tc"></app-tool-call>
-        </div>
+        <!-- Processo persistido: pode ser reaberto depois que o turno termina. -->
+        <details class="execution-history" *ngIf="(m.tool_calls || []).length">
+          <summary>
+            <span>⚙️ Ver processo realizado</span>
+            <span class="execution-history-count">{{ (m.tool_calls || []).length }} etapa(s)</span>
+          </summary>
+          <div class="tool-calls-group">
+            <app-tool-call *ngFor="let tc of m.tool_calls" [tc]="tc"></app-tool-call>
+          </div>
+        </details>
 
         <!-- Anexos/artefatos, roteados por kind -->
         <ng-container *ngFor="let att of attachmentsOf(m)">

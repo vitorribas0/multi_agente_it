@@ -3,12 +3,93 @@ from tempfile import TemporaryDirectory
 
 from django.test import SimpleTestCase, TestCase, override_settings
 
+from .codex_app_server import CodexAppServer
 from .codex_views import (
+    _codex_trace_record,
     _is_html_revision_request,
     _prompt_with_history,
     _split_html_response,
 )
 from .models import Conversation, Message
+
+
+class CodexAppServerEventTests(SimpleTestCase):
+    def test_streams_complete_activity_lifecycle_and_command_output(self):
+        client = object.__new__(CodexAppServer)
+        sent = []
+        client._send = lambda payload: sent.append(payload)
+        client._messages = lambda: iter([
+            {
+                "method": "item/started",
+                "params": {"item": {
+                    "type": "commandExecution",
+                    "id": "cmd-1",
+                    "command": "python analisar.py",
+                    "cwd": "/tmp/chat",
+                    "status": "inProgress",
+                }},
+            },
+            {
+                "method": "item/commandExecution/outputDelta",
+                "params": {"itemId": "cmd-1", "delta": "processando\n"},
+            },
+            {
+                "method": "item/completed",
+                "params": {"item": {
+                    "type": "commandExecution",
+                    "id": "cmd-1",
+                    "command": "python analisar.py",
+                    "cwd": "/tmp/chat",
+                    "status": "completed",
+                    "exitCode": 0,
+                    "durationMs": 125,
+                    "aggregatedOutput": "concluído",
+                }},
+            },
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"status": "completed", "error": None}},
+            },
+        ])
+
+        events = list(client.turn("thread-1", "analise"))
+
+        self.assertEqual(sent[0]["method"], "turn/start")
+        self.assertEqual(events[0]["phase"], "started")
+        self.assertEqual(events[0]["item"]["id"], "cmd-1")
+        self.assertEqual(events[1]["type"], "activity_output")
+        self.assertEqual(events[2]["phase"], "completed")
+        self.assertEqual(events[3]["type"], "completed")
+
+
+class CodexTraceMappingTests(SimpleTestCase):
+    def test_maps_command_to_persistable_trace(self):
+        record = _codex_trace_record({
+            "type": "commandExecution",
+            "id": "cmd-2",
+            "command": "python analisar.py",
+            "cwd": "/tmp/chat-12",
+            "status": "completed",
+            "aggregatedOutput": "42 registros",
+            "exitCode": 0,
+            "durationMs": 240,
+        })
+
+        self.assertEqual(record["tool"], "codex_command")
+        self.assertEqual(record["args"]["command"], "python analisar.py")
+        self.assertEqual(record["result"], "42 registros")
+        self.assertEqual(record["duration_ms"], 240)
+
+    def test_redacts_api_key_from_trace(self):
+        record = _codex_trace_record({
+            "type": "commandExecution",
+            "id": "cmd-3",
+            "command": "OPENAI_API_KEY=secret-value comando",
+            "status": "completed",
+            "aggregatedOutput": "ok",
+        })
+
+        self.assertNotIn("secret-value", record["args"]["command"])
 
 
 class CodexHtmlArtifactTests(SimpleTestCase):

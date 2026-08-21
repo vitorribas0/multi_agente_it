@@ -51,7 +51,7 @@ export class LiveNodeComponent {
 
   // Chaves candidatas a "código/documento", em ordem de prioridade.
   private static readonly CODE_KEYS = [
-    'codigo', 'sql', 'query_sql', 'query', 'code', 'html', 'markdown', 'conteudo',
+    'codigo', 'sql', 'query_sql', 'query', 'code', 'command', 'html', 'markdown', 'conteudo',
   ];
 
   // Qual chave dos args foi usada como código (ou '' se nenhuma).
@@ -75,6 +75,7 @@ export class LiveNodeComponent {
   get codeLang(): string {
     const t = this.node.tool || '';
     const args = this.node.args || {};
+    if (t === 'codex_command' || 'command' in args) return 'bash';
     if (t === 'executar_pandas' || 'codigo' in args || 'code' in args) return 'python';
     if (t === 'consulta_aws' || 'sql' in args || 'query_sql' in args || 'query' in args) return 'sql';
     if ('html' in args) return 'xml';
@@ -121,7 +122,7 @@ export class LiveNodeComponent {
   // (codeArg) e prosa (proseArgs), que têm blocos próprios.
   get otherArgs(): ArgEntry[] {
     const args = this.node.args || {};
-    const skip = new Set(['codigo', 'sql', 'query_sql', 'query', 'code', 'html', 'markdown', 'conteudo']);
+    const skip = new Set(['codigo', 'sql', 'query_sql', 'query', 'code', 'command', 'html', 'markdown', 'conteudo']);
     return Object.entries(args)
       .filter(([k]) => !skip.has(k) && !PROSE_KEYS.has(k))
       .map(([k, v]) => {

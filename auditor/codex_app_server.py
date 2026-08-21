@@ -16,6 +16,18 @@ from pathlib import Path
 from typing import Iterator
 
 
+_TRACE_ITEM_TYPES = {
+    "commandExecution",
+    "fileChange",
+    "mcpToolCall",
+    "dynamicToolCall",
+    "collabToolCall",
+    "webSearch",
+    "imageView",
+    "contextCompaction",
+}
+
+
 class CodexAppServerError(RuntimeError):
     pass
 
@@ -177,8 +189,33 @@ class CodexAppServer:
                 item_type = item.get("type")
                 if item_type == "agentMessage":
                     message_phases[item.get("id", "")] = item.get("phase")
-                if item_type in {"commandExecution", "mcpToolCall", "webSearch"}:
-                    yield {"type": "activity", "activity": item_type}
+                if item_type in _TRACE_ITEM_TYPES:
+                    yield {
+                        "type": "activity",
+                        "phase": "started",
+                        "activity": item_type,
+                        "item": item,
+                    }
+            elif method == "item/completed":
+                item = params.get("item") or {}
+                item_type = item.get("type")
+                if item_type == "agentMessage":
+                    message_phases[item.get("id", "")] = item.get("phase")
+                if item_type in _TRACE_ITEM_TYPES:
+                    yield {
+                        "type": "activity",
+                        "phase": "completed",
+                        "activity": item_type,
+                        "item": item,
+                    }
+            elif method == "item/commandExecution/outputDelta":
+                delta = params.get("delta") or ""
+                if delta:
+                    yield {
+                        "type": "activity_output",
+                        "item_id": params.get("itemId"),
+                        "text": delta,
+                    }
             elif method == "turn/completed":
                 turn = params.get("turn") or {}
                 yield {

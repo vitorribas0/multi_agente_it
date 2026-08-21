@@ -26,7 +26,7 @@ interface CodeBlock {
 // campos de conteúdo da caixa/geradores.
 const CODE_KEYS = new Set([
   'codigo', 'code', 'sql', 'query',
-  'html', 'conteudo', 'markdown', 'trecho_antigo', 'trecho_novo',
+  'html', 'conteudo', 'markdown', 'trecho_antigo', 'trecho_novo', 'command',
 ]);
 
 // Card de uma tool-call, colapsável, recursivo (nested_tool_calls = sub-agente).
@@ -97,6 +97,7 @@ export class ToolCallComponent implements OnInit {
     if (key === 'sql' || key === 'query') return 'sql';
     if (key === 'html') return 'xml';
     if (key === 'markdown') return 'markdown';
+    if (key === 'command') return 'bash';
     return 'plaintext';
   }
 

@@ -1601,6 +1601,40 @@ body.html-preview-open:not(.html-preview-full) .main {
   margin-bottom: 10px;
 }
 
+.execution-history {
+  margin: 0 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  overflow: hidden;
+}
+
+.execution-history > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.execution-history > summary::-webkit-details-marker { display: none; }
+.execution-history > summary:hover { color: var(--accent); background: var(--bg-hover); }
+.execution-history[open] > summary { border-bottom: 1px solid var(--border); }
+.execution-history .tool-calls-group { padding: 8px; margin-bottom: 0; }
+
+.execution-history-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .tool-call {
   background: var(--bg-elevated);
   border: 1px solid var(--border);

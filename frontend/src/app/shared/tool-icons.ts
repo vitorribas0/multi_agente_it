@@ -19,6 +19,14 @@ const TOOL_ICONS: Record<string, string> = {
   ler_documento: '📖',
   buscar_no_documento: '🔎',
   extrair_tabelas_do_documento: '📊',
+  codex_command: '⌨️',
+  codex_file_change: '📝',
+  codex_mcp: '🔌',
+  codex_tool: '⚙️',
+  codex_subagent: '🤝',
+  codex_web_search: '🌐',
+  codex_image_view: '🖼️',
+  codex_compaction: '🧠',
 };
 
 export function iconForTool(name: string): string {

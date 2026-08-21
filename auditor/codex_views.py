@@ -6,6 +6,7 @@ import json
 import queue
 import re
 import threading
+import time
 import unicodedata
 from pathlib import Path
 
@@ -15,13 +16,177 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
 from .codex_app_server import CodexAppServer, CodexAppServerError
-from .models import Message
+from .models import Message, ToolCall
 from .views import _message_payload, _resolve_conversation
 from tools.gerar_html import gerar_html
 
 
 _HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _HTML_EXPORT_PREFIX = "/api/exports/"
+_TRACE_TEXT_LIMIT = 6000
+_TRACE_RESULT_PREVIEW_LIMIT = 1200
+_TRACE_META = {
+    "commandExecution": ("codex_command", "⌨️"),
+    "fileChange": ("codex_file_change", "📝"),
+    "mcpToolCall": ("codex_mcp", "🔌"),
+    "dynamicToolCall": ("codex_tool", "⚙️"),
+    "collabToolCall": ("codex_subagent", "🤝"),
+    "webSearch": ("codex_web_search", "🌐"),
+    "imageView": ("codex_image_view", "🖼️"),
+    "contextCompaction": ("codex_compaction", "🧠"),
+}
+
+
+def _sanitize_trace_text(value, limit: int = _TRACE_TEXT_LIMIT) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            value = str(value)
+    value = re.sub(
+        r"(?i)((?:OPENAI|AWS|AZURE|IARA)[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)\s*[=:]\s*)([^\s,;]+)",
+        r"\1[REDACTED]",
+        value,
+    )
+    value = re.sub(r"\bsk-[A-Za-z0-9_-]{16,}\b", "[REDACTED]", value)
+    return value if len(value) <= limit else value[:limit] + "…"
+
+
+def _bounded_trace_value(value):
+    """Mantém args estruturados pequenos e transforma payloads grandes em prévia."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _sanitize_trace_text(value, 4000)
+    serialized = _sanitize_trace_text(value, 8000)
+    try:
+        parsed = json.loads(serialized)
+    except json.JSONDecodeError:
+        return serialized
+    return parsed
+
+
+def _codex_trace_args(item: dict) -> dict:
+    item_type = item.get("type")
+    if item_type == "commandExecution":
+        return {
+            "command": _sanitize_trace_text(item.get("command"), 4000),
+            "cwd": Path(str(item.get("cwd") or ".")).name,
+        }
+    if item_type == "mcpToolCall":
+        return {
+            "server": item.get("server") or "",
+            "tool": item.get("tool") or "",
+            "arguments": _bounded_trace_value(item.get("arguments") or {}),
+        }
+    if item_type == "dynamicToolCall":
+        return {
+            "tool": item.get("tool") or "",
+            "arguments": _bounded_trace_value(item.get("arguments") or {}),
+        }
+    if item_type == "collabToolCall":
+        return {
+            "tool": item.get("tool") or "",
+            "prompt": _sanitize_trace_text(item.get("prompt"), 3000),
+        }
+    if item_type == "webSearch":
+        return {
+            "query": _sanitize_trace_text(item.get("query"), 2000),
+            "action": _bounded_trace_value(item.get("action") or {}),
+        }
+    if item_type == "fileChange":
+        return {
+            "changes": [
+                {"path": change.get("path"), "kind": change.get("kind")}
+                for change in (item.get("changes") or [])[:50]
+                if isinstance(change, dict)
+            ]
+        }
+    if item_type == "imageView":
+        return {"path": Path(str(item.get("path") or "imagem")).name}
+    return {}
+
+
+def _codex_trace_label(item: dict) -> str:
+    item_type = item.get("type")
+    if item_type == "commandExecution":
+        command = _sanitize_trace_text(item.get("command"), 100).splitlines()[0]
+        return f"Executando no sandbox · {command}" if command else "Executando no sandbox"
+    if item_type == "mcpToolCall":
+        target = " · ".join(filter(None, [str(item.get("server") or ""), str(item.get("tool") or "")]))
+        return f"Consultando ferramenta · {target}" if target else "Consultando ferramenta"
+    if item_type == "dynamicToolCall":
+        return f"Executando ferramenta · {item.get('tool') or 'Codex'}"
+    if item_type == "collabToolCall":
+        return f"Coordenando subagente · {item.get('tool') or 'Codex'}"
+    if item_type == "webSearch":
+        query = _sanitize_trace_text(item.get("query"), 100)
+        return f"Pesquisando na web · {query}" if query else "Pesquisando na web"
+    if item_type == "fileChange":
+        return f"Preparando alterações em {len(item.get('changes') or [])} arquivo(s)"
+    if item_type == "imageView":
+        return f"Inspecionando imagem · {Path(str(item.get('path') or 'imagem')).name}"
+    if item_type == "contextCompaction":
+        return "Organizando o contexto da conversa"
+    return "Executando atividade do Codex"
+
+
+def _codex_trace_result(item: dict, streamed_output: str = "") -> tuple[str, str]:
+    item_type = item.get("type")
+    status = str(item.get("status") or "completed").lower()
+    error_value = item.get("error")
+    error = _sanitize_trace_text(error_value)
+    if status in {"failed", "declined", "cancelled", "canceled"} and not error:
+        error = f"Atividade encerrada com status {status}."
+
+    if item_type == "commandExecution":
+        result = item.get("aggregatedOutput") or streamed_output
+        exit_code = item.get("exitCode")
+        if exit_code not in (None, 0) and not error:
+            error = f"Comando encerrado com código {exit_code}."
+        return _sanitize_trace_text(result), error
+    if item_type == "mcpToolCall":
+        return _sanitize_trace_text(item.get("result")), error
+    if item_type == "dynamicToolCall":
+        return _sanitize_trace_text(item.get("contentItems") or item.get("success")), error
+    if item_type == "collabToolCall":
+        return _sanitize_trace_text(item.get("agentStatus") or status), error
+    if item_type == "webSearch":
+        return "Pesquisa concluída.", error
+    if item_type == "fileChange":
+        return f"{len(item.get('changes') or [])} alteração(ões) processada(s).", error
+    if item_type == "imageView":
+        return "Imagem inspecionada.", error
+    if item_type == "contextCompaction":
+        return "Contexto da conversa organizado.", error
+    return _sanitize_trace_text(status), error
+
+
+def _codex_trace_record(item: dict, streamed_output: str = "", elapsed_ms: int = 0) -> dict | None:
+    item_type = item.get("type")
+    meta = _TRACE_META.get(item_type)
+    item_id = str(item.get("id") or "")
+    if not meta or not item_id:
+        return None
+    result, error = _codex_trace_result(item, streamed_output)
+    duration = item.get("durationMs")
+    try:
+        duration_ms = int(duration if duration is not None else elapsed_ms)
+    except (TypeError, ValueError):
+        duration_ms = elapsed_ms
+    return {
+        "id": item_id,
+        "item_type": item_type,
+        "tool": meta[0],
+        "icon": meta[1],
+        "label": _codex_trace_label(item),
+        "args": _codex_trace_args(item),
+        "result": result,
+        "error": error,
+        "duration_ms": max(0, duration_ms),
+    }
 
 
 def _split_html_response(answer: str) -> tuple[str, str | None]:
@@ -264,6 +429,10 @@ def codex_chat_stream(request):
 
     def worker() -> None:
         answer_parts: list[str] = []
+        trace_records: dict[str, dict] = {}
+        trace_started_at: dict[str, float] = {}
+        trace_output: dict[str, str] = {}
+        trace_completed: set[str] = set()
         try:
             session_workspace = _prepare_session_workspace(conv)
             with CodexAppServer(session_workspace) as client:
@@ -276,25 +445,76 @@ def codex_chat_stream(request):
                 conv.save(update_fields=["state", "updated_at"])
                 events.put({"type": "progress", "stage": "thinking", "icon": "🛡️", "text": "Sandbox somente leitura · skills de auditoria carregadas"})
 
-                activity_labels = {
-                    "commandExecution": "Executando análise no sandbox",
-                    "mcpToolCall": "Consultando ferramenta autorizada",
-                    "webSearch": "Pesquisando fonte externa",
-                }
-
                 def collect_turn(turn_prompt: str) -> str:
                     parts: list[str] = []
                     for event in client.turn(thread_id, turn_prompt):
                         if event["type"] == "delta" and event.get("phase") != "commentary":
                             parts.append(event["text"])
                         elif event["type"] == "activity":
-                            label = activity_labels.get(event["activity"], "Processando")
-                            events.put({
-                                "type": "progress",
-                                "stage": "tool",
-                                "icon": "⚙️",
-                                "text": label,
-                            })
+                            item = event.get("item") or {}
+                            item_id = str(item.get("id") or "")
+                            phase = event.get("phase")
+                            if phase == "started":
+                                record = _codex_trace_record(item)
+                                if record:
+                                    trace_records[item_id] = record
+                                    trace_started_at[item_id] = time.monotonic()
+                                    events.put({
+                                        "type": "progress",
+                                        "stage": "tool",
+                                        "agent": "codex",
+                                        "tool": record["tool"],
+                                        "tool_call_id": item_id,
+                                        "args": record["args"],
+                                        "icon": record["icon"],
+                                        "text": record["label"],
+                                    })
+                            elif phase == "completed":
+                                started_at = trace_started_at.get(item_id)
+                                elapsed_ms = (
+                                    round((time.monotonic() - started_at) * 1000)
+                                    if started_at is not None else 0
+                                )
+                                record = _codex_trace_record(
+                                    item,
+                                    trace_output.get(item_id, ""),
+                                    elapsed_ms,
+                                )
+                                if record:
+                                    # Alguns clientes podem receber somente o completed;
+                                    # ainda assim criamos o nó antes de encerrá-lo.
+                                    if item_id not in trace_records:
+                                        events.put({
+                                            "type": "progress",
+                                            "stage": "tool",
+                                            "agent": "codex",
+                                            "tool": record["tool"],
+                                            "tool_call_id": item_id,
+                                            "args": record["args"],
+                                            "icon": record["icon"],
+                                            "text": record["label"],
+                                        })
+                                    trace_records[item_id] = record
+                                    trace_completed.add(item_id)
+                                    events.put({
+                                        "type": "progress",
+                                        "stage": "tool_result",
+                                        "agent": "codex",
+                                        "tool": record["tool"],
+                                        "tool_call_id": item_id,
+                                        "error": record["error"],
+                                        "duration_ms": record["duration_ms"],
+                                        "result_preview": _sanitize_trace_text(
+                                            record["result"], _TRACE_RESULT_PREVIEW_LIMIT
+                                        ),
+                                    })
+                        elif event["type"] == "activity_output":
+                            item_id = str(event.get("item_id") or "")
+                            if item_id:
+                                current = trace_output.get(item_id, "")
+                                trace_output[item_id] = _sanitize_trace_text(
+                                    current + str(event.get("text") or "")
+                                )
                         elif event["type"] == "completed" and event.get("status") != "completed":
                             raise CodexAppServerError(
                                 str(event.get("error") or "Turno não concluído.")
@@ -322,6 +542,15 @@ def codex_chat_stream(request):
 
                 answer_parts.append(answer)
 
+            for item_id, record in trace_records.items():
+                if item_id not in trace_completed:
+                    started_at = trace_started_at.get(item_id)
+                    if started_at is not None:
+                        record["duration_ms"] = round(
+                            (time.monotonic() - started_at) * 1000
+                        )
+                    record["result"] = record["result"] or "Atividade concluída com o turno."
+
             answer = "".join(answer_parts).strip()
             if not answer:
                 answer = "O Codex concluiu o turno sem produzir uma mensagem de texto."
@@ -332,6 +561,15 @@ def codex_chat_stream(request):
                 content=answer,
                 attachments=attachments,
             )
+            for record in trace_records.values():
+                ToolCall.objects.create(
+                    message=assistant,
+                    tool_name=record["tool"],
+                    args=record["args"],
+                    result=record["result"],
+                    error=record["error"],
+                    duration_ms=record["duration_ms"],
+                )
             events.put({
                 "type": "done",
                 "payload": {
