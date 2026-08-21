@@ -913,6 +913,289 @@ body.html-preview-open:not(.html-preview-full) .main {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ─── Plano ao vivo e solicitações interativas do Codex ───────── */
+.agent-plan,
+.agent-interaction {
+  margin: 8px 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  overflow: hidden;
+  animation: progressIn .25s ease forwards;
+}
+
+.agent-plan {
+  padding: 12px 14px;
+}
+
+.agent-plan-heading,
+.agent-interaction-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.agent-plan-heading {
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+.agent-plan-heading small {
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #fb923c;
+  background: rgba(236, 112, 0, .12);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.agent-plan > p {
+  margin: 0 0 9px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-plan-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 5px 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.agent-plan-icon {
+  width: 16px;
+  flex: 0 0 16px;
+  color: var(--text-muted);
+  text-align: center;
+  font-weight: 800;
+}
+
+.agent-plan-step.plan-active {
+  color: var(--text-primary);
+}
+.agent-plan-step.plan-active .agent-plan-icon {
+  color: #fb923c;
+  animation: planPulse 1.15s ease-in-out infinite;
+}
+.agent-plan-step.plan-done {
+  color: var(--text-secondary);
+}
+.agent-plan-step.plan-done .agent-plan-icon {
+  color: #22c55e;
+}
+
+@keyframes planPulse {
+  50% { opacity: .35; transform: scale(.8); }
+}
+
+.agent-interaction {
+  padding: 14px;
+  border-color: rgba(236, 112, 0, .48);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .2), inset 3px 0 0 #ec7000;
+}
+
+.agent-interaction-heading {
+  margin-bottom: 11px;
+}
+
+.agent-interaction-icon {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  flex: 0 0 31px;
+  border-radius: 9px;
+  background: rgba(236, 112, 0, .14);
+}
+
+.agent-interaction-heading div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-interaction-heading strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.agent-interaction-heading small,
+.approval-cwd {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.agent-interaction-reason,
+.approval-network {
+  margin: 8px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.agent-question + .agent-question {
+  padding-top: 13px;
+  border-top: 1px solid var(--border);
+}
+
+.agent-question-header {
+  width: max-content;
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: #fb923c;
+  background: rgba(236, 112, 0, .1);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.agent-question > label {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agent-question-options {
+  display: grid;
+  gap: 7px;
+}
+
+.agent-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+
+.agent-option:hover {
+  border-color: rgba(236, 112, 0, .5);
+  background: rgba(236, 112, 0, .05);
+}
+
+.agent-option input {
+  margin-top: 3px;
+  accent-color: #ec7000;
+}
+
+.agent-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-option strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.agent-option small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.agent-other-input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  padding: 9px 10px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.agent-other-input:focus {
+  border-color: #ec7000;
+  box-shadow: 0 0 0 3px rgba(236, 112, 0, .1);
+}
+
+.approval-command {
+  max-height: 180px;
+  margin: 10px 0 6px;
+  padding: 10px 11px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: #d7dae4;
+  background: #0d0d14;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent-interaction-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.agent-interaction-actions button {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.agent-interaction-actions button:hover:not(:disabled) {
+  border-color: #ec7000;
+  color: var(--text-primary);
+}
+
+.agent-interaction-actions button.interaction-primary {
+  border-color: #ec7000;
+  color: #fff;
+  background: linear-gradient(135deg, #ec7000, #ff8f2d);
+}
+
+.agent-interaction-actions button.interaction-deny:hover:not(:disabled) {
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
+.agent-interaction-actions button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.agent-interaction-error {
+  margin-top: 9px;
+  color: #fca5a5;
+  font-size: 11px;
+}
+
+@media (max-width: 600px) {
+  .agent-interaction-actions button { flex: 1 1 100%; }
+}
+
 /* ─── Input ──────────────────────────────────────────────── */
 .input-area {
   padding: 16px 28px 24px;

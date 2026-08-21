@@ -10,6 +10,7 @@ import shutil
 import threading
 import time
 import unicodedata
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,7 +20,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
 from .codex_app_server import CodexAppServer, CodexAppServerError
-from .models import Message, ToolCall
+from .models import Conversation, Message, ToolCall
 from .views import _message_payload, _resolve_conversation
 from tools.gerar_html import gerar_html
 
@@ -42,6 +43,198 @@ _TRACE_META = {
     "imageView": ("codex_image_view", "🖼️"),
     "contextCompaction": ("codex_compaction", "🧠"),
 }
+
+
+@dataclass
+class _PendingCodexInteraction:
+    conversation_id: int
+    method: str
+    params: dict
+    ready: threading.Event = field(default_factory=threading.Event)
+    response: dict | None = None
+
+
+_PENDING_INTERACTIONS: dict[str, _PendingCodexInteraction] = {}
+_PENDING_INTERACTIONS_LOCK = threading.Lock()
+_INTERACTION_TIMEOUT_SECONDS = 10 * 60
+
+
+def _interaction_public_payload(token: str, method: str, params: dict) -> dict:
+    """Converte uma request do App Server num contrato pequeno para a UI."""
+    base = {
+        "token": token,
+        "reason": _sanitize_trace_text(params.get("reason"), 1000),
+    }
+    if method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
+        questions = []
+        for raw in (params.get("questions") or [])[:3]:
+            if not isinstance(raw, dict):
+                continue
+            questions.append({
+                "id": str(raw.get("id") or "")[:120],
+                "header": _sanitize_trace_text(raw.get("header"), 80),
+                "question": _sanitize_trace_text(raw.get("question"), 1000),
+                "isOther": bool(raw.get("isOther")),
+                "isSecret": bool(raw.get("isSecret")),
+                "options": [
+                    {
+                        "label": _sanitize_trace_text(option.get("label"), 120),
+                        "description": _sanitize_trace_text(option.get("description"), 400),
+                    }
+                    for option in (raw.get("options") or [])[:8]
+                    if isinstance(option, dict)
+                ],
+            })
+        return {
+            **base,
+            "kind": "question",
+            "title": "O agente precisa de você",
+            "questions": questions,
+        }
+    if method == "item/commandExecution/requestApproval":
+        network = params.get("networkApprovalContext") or {}
+        available = [
+            value for value in (params.get("availableDecisions") or [])
+            if isinstance(value, str)
+        ]
+        return {
+            **base,
+            "kind": "command_approval",
+            "title": "Autorizar comando?",
+            "command": _sanitize_trace_text(params.get("command"), 4000),
+            "cwd": Path(str(params.get("cwd") or ".")).name,
+            "network": {
+                "host": _sanitize_trace_text(network.get("host"), 300),
+                "protocol": _sanitize_trace_text(network.get("protocol"), 40),
+            } if isinstance(network, dict) and network else None,
+            "availableDecisions": available,
+        }
+    if method == "item/fileChange/requestApproval":
+        return {
+            **base,
+            "kind": "file_approval",
+            "title": "Autorizar alteração de arquivo?",
+            "grantRoot": _sanitize_trace_text(params.get("grantRoot"), 1000),
+        }
+    return {
+        **base,
+        "kind": "permission_approval",
+        "title": "Autorizar permissões extras?",
+        "cwd": Path(str(params.get("cwd") or ".")).name,
+        "permissions": _bounded_trace_value(params.get("permissions") or {}),
+    }
+
+
+def _safe_interaction_fallback(method: str) -> dict:
+    if method == "item/permissions/requestApproval":
+        return {"permissions": {}, "scope": "turn"}
+    if method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
+        return {"answers": {}}
+    return {"decision": "decline"}
+
+
+def _wait_for_interaction(conv, events: "queue.Queue[dict]", method: str, params: dict) -> dict:
+    token = uuid4().hex
+    pending = _PendingCodexInteraction(conv.id, method, params)
+    with _PENDING_INTERACTIONS_LOCK:
+        _PENDING_INTERACTIONS[token] = pending
+
+    Conversation.objects.filter(pk=conv.id).update(awaiting_human_input=True)
+    events.put({
+        "type": "interaction",
+        "interaction": _interaction_public_payload(token, method, params),
+    })
+    timeout = _INTERACTION_TIMEOUT_SECONDS
+    auto_resolution_ms = params.get("autoResolutionMs")
+    if isinstance(auto_resolution_ms, (int, float)) and auto_resolution_ms > 0:
+        timeout = min(timeout, max(1, auto_resolution_ms / 1000))
+    resolved = pending.ready.wait(timeout=timeout)
+
+    with _PENDING_INTERACTIONS_LOCK:
+        _PENDING_INTERACTIONS.pop(token, None)
+    Conversation.objects.filter(pk=conv.id).update(awaiting_human_input=False)
+    if not resolved or pending.response is None:
+        events.put({
+            "type": "progress",
+            "stage": "thinking",
+            "icon": "⏱️",
+            "text": "Solicitação expirada; a ação não foi autorizada",
+        })
+        return _safe_interaction_fallback(method)
+    events.put({
+        "type": "progress",
+        "stage": "thinking",
+        "icon": "▶️",
+        "text": "Resposta recebida; retomando a execução",
+    })
+    return pending.response
+
+
+@csrf_exempt
+def codex_interaction_respond(request, token: str):
+    if request.method != "POST":
+        return JsonResponse({"status": "error", "message": "Method not allowed"}, status=405)
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"status": "error", "message": "JSON inválido."}, status=400)
+
+    with _PENDING_INTERACTIONS_LOCK:
+        pending = _PENDING_INTERACTIONS.get(token)
+        if pending is None:
+            return JsonResponse(
+                {"status": "error", "message": "Solicitação expirada ou inexistente."},
+                status=404,
+            )
+        if pending.response is not None:
+            return JsonResponse({"status": "error", "message": "Solicitação já respondida."}, status=409)
+
+        if data.get("cancel") is True:
+            pending.response = _safe_interaction_fallback(pending.method)
+        elif pending.method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
+            raw_answers = data.get("answers") or {}
+            if not isinstance(raw_answers, dict):
+                return JsonResponse({"status": "error", "message": "Respostas inválidas."}, status=400)
+            valid_ids = {
+                str(question.get("id"))
+                for question in (pending.params.get("questions") or [])
+                if isinstance(question, dict) and question.get("id") is not None
+            }
+            answers = {}
+            for question_id in valid_ids:
+                values = raw_answers.get(question_id, [])
+                if isinstance(values, str):
+                    values = [values]
+                if not isinstance(values, list):
+                    values = []
+                cleaned = [
+                    str(value).strip()[:4000]
+                    for value in values[:10]
+                    if str(value).strip()
+                ]
+                if cleaned:
+                    answers[question_id] = {"answers": cleaned}
+            if valid_ids and len(answers) != len(valid_ids):
+                return JsonResponse({"status": "error", "message": "Responda todas as perguntas."}, status=400)
+            pending.response = {"answers": answers}
+        elif pending.method == "item/permissions/requestApproval":
+            approved = bool(data.get("approve"))
+            scope = "session" if data.get("scope") == "session" else "turn"
+            pending.response = {
+                "permissions": (
+                    pending.params.get("permissions") or {}
+                ) if approved else {},
+                "scope": scope,
+            }
+        else:
+            decision = data.get("decision")
+            allowed = {"accept", "acceptForSession", "decline", "cancel"}
+            if decision not in allowed:
+                return JsonResponse({"status": "error", "message": "Decisão inválida."}, status=400)
+            pending.response = {"decision": decision}
+        pending.ready.set()
+
+    return JsonResponse({"status": "success"})
 
 
 def _sanitize_trace_text(value, limit: int = _TRACE_TEXT_LIMIT) -> str:
@@ -628,9 +821,30 @@ def codex_chat_stream(request):
 
                 def collect_turn(turn_prompt: str) -> str:
                     parts: list[str] = []
-                    for event in client.turn(thread_id, turn_prompt):
+                    for event in client.turn(
+                        thread_id,
+                        turn_prompt,
+                        server_request_handler=lambda method, params: _wait_for_interaction(
+                            conv, events, method, params
+                        ),
+                    ):
                         if event["type"] == "delta" and event.get("phase") != "commentary":
                             parts.append(event["text"])
+                        elif event["type"] == "plan":
+                            events.put({
+                                "type": "plan",
+                                "explanation": _sanitize_trace_text(
+                                    event.get("explanation"), 1200
+                                ),
+                                "plan": [
+                                    {
+                                        "step": _sanitize_trace_text(item.get("step"), 500),
+                                        "status": item.get("status") or "pending",
+                                    }
+                                    for item in (event.get("plan") or [])[:20]
+                                    if isinstance(item, dict)
+                                ],
+                            })
                         elif event["type"] == "activity":
                             item = event.get("item") or {}
                             item_id = str(item.get("id") or "")
@@ -769,6 +983,7 @@ def codex_chat_stream(request):
                     "conversation_title": conv.title,
                     "agent_slug": conv.agent.slug if conv.agent else None,
                     "engine": "codex-app-server",
+                    "awaiting_human_input": False,
                     "reply": _message_payload(assistant),
                 },
             })
@@ -777,6 +992,7 @@ def codex_chat_stream(request):
         finally:
             from django.db import connection
 
+            Conversation.objects.filter(pk=conv.id).update(awaiting_human_input=False)
             connection.close()
             events.put(sentinel)
 

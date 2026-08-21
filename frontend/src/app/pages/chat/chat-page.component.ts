@@ -23,6 +23,9 @@ import {
   Attachment,
   ChartAttachment,
   ChatMessage,
+  CodexInteraction,
+  CodexPlanEvent,
+  CodexPlanItem,
   DocumentAttachment,
   ExportAttachment,
   ChatProgressEvent,
@@ -121,6 +124,12 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   input = '';
   isLoading = false;
   awaitingHuman = false;
+  pendingInteraction: CodexInteraction | null = null;
+  interactionAnswers: Record<string, string> = {};
+  interactionSubmitting = false;
+  interactionError = '';
+  livePlan: CodexPlanItem[] = [];
+  livePlanExplanation = '';
 
   // Menu de anexos aberto?
   attachMenuOpen = false;
@@ -186,13 +195,14 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (idNum === this.conversationId) return;
       // Troca de conversa: aborta qualquer geração em curso para a resposta não
       // cair na conversa errada (o legado recarregava a página, matando tudo).
-      if (this.controller) this.controller.abort();
+      if (this.controller) this.stop();
       if (idNum) this.loadConversation(idNum);
       else this.resetChat();
     });
   }
 
   ngOnDestroy(): void {
+    this.cancelPendingInteraction();
     this.routeSub?.unsubscribe();
     document.body.classList.remove('html-preview-open', 'html-preview-full');
     this.cleanupLivePanel();
@@ -203,6 +213,11 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.conversationId = null;
     this.messages = [];
     this.awaitingHuman = false;
+    this.pendingInteraction = null;
+    this.interactionAnswers = {};
+    this.interactionError = '';
+    this.livePlan = [];
+    this.livePlanExplanation = '';
     this.hasSessionAgent = false;
     this.activeKbs = [];
     this.activeKnowledge = [];
@@ -328,6 +343,11 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.typing = true;
     this.progress = [];
     this.resetLiveTree();
+    this.pendingInteraction = null;
+    this.interactionAnswers = {};
+    this.interactionError = '';
+    this.livePlan = [];
+    this.livePlanExplanation = '';
     this.scrollSoon();
 
     try {
@@ -349,10 +369,24 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
             this.pushProgress(evt);
             this.ingestLiveEvent(evt);
           },
+          onInteraction: (interaction) => {
+            this.pendingInteraction = interaction;
+            this.interactionAnswers = {};
+            this.interactionError = '';
+            this.awaitingHuman = true;
+            this.scrollSoon();
+          },
+          onPlan: (evt: CodexPlanEvent) => {
+            this.livePlan = evt.plan || [];
+            this.livePlanExplanation = evt.explanation || '';
+            this.scrollSoon();
+          },
         },
       );
 
       this.typing = false;
+      this.pendingInteraction = null;
+      this.awaitingHuman = false;
       // Marca como concluído qualquer nó que tenha ficado "processando" (ex.:
       // o agente respondeu direto sem emitir tool_result para tudo).
       this.finalizeLiveTree();
@@ -398,8 +432,62 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.scrollSoon();
   }
 
+  get interactionQuestionsComplete(): boolean {
+    const questions = this.pendingInteraction?.questions || [];
+    return questions.length > 0 && questions.every((question) => !!this.interactionAnswers[question.id]?.trim());
+  }
+
+  planIcon(status: CodexPlanItem['status']): string {
+    if (status === 'completed') return '✓';
+    if (status === 'inProgress') return '●';
+    return '○';
+  }
+
+  async submitInteractionAnswers(): Promise<void> {
+    if (!this.pendingInteraction || !this.interactionQuestionsComplete) return;
+    const answers: Record<string, string[]> = {};
+    for (const question of this.pendingInteraction.questions || []) {
+      answers[question.id] = [this.interactionAnswers[question.id].trim()];
+    }
+    await this.respondToInteraction({ answers });
+  }
+
+  async approveInteraction(decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'): Promise<void> {
+    await this.respondToInteraction({ decision });
+  }
+
+  async approvePermissions(approve: boolean, scope: 'turn' | 'session' = 'turn'): Promise<void> {
+    await this.respondToInteraction({ approve, scope });
+  }
+
+  private async respondToInteraction(payload: Record<string, unknown>): Promise<void> {
+    const interaction = this.pendingInteraction;
+    if (!interaction || this.interactionSubmitting) return;
+    this.interactionSubmitting = true;
+    this.interactionError = '';
+    try {
+      await this.chat.respondToCodexInteraction(interaction.token, payload);
+      this.pendingInteraction = null;
+      this.awaitingHuman = false;
+    } catch (err: any) {
+      this.interactionError = err?.message || String(err);
+    } finally {
+      this.interactionSubmitting = false;
+      this.scrollSoon();
+    }
+  }
+
   stop(): void {
+    this.cancelPendingInteraction();
     if (this.controller) this.controller.abort();
+  }
+
+  private cancelPendingInteraction(): void {
+    const interaction = this.pendingInteraction;
+    if (!interaction) return;
+    this.pendingInteraction = null;
+    this.awaitingHuman = false;
+    void this.chat.respondToCodexInteraction(interaction.token, { cancel: true }).catch(() => {});
   }
 
   // Escreve ?c=<id> na URL sem recarregar nem recriar o componente. replaceUrl

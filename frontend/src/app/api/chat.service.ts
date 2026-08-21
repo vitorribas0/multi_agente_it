@@ -4,6 +4,8 @@ import { Observable } from 'rxjs';
 
 import {
   ActiveKnowledgeRef,
+  CodexInteraction,
+  CodexPlanEvent,
   ChatDonePayload,
   ChatProgressEvent,
   ConversationDetail,
@@ -39,6 +41,8 @@ export interface ChatStreamRequest {
 // a Promise resolve com o payload final (evento 'done') ou {status:'error'}.
 export interface StreamHandlers {
   onProgress?: (evt: ChatProgressEvent) => void;
+  onInteraction?: (interaction: CodexInteraction) => void;
+  onPlan?: (evt: CodexPlanEvent) => void;
   signal?: AbortSignal;
 }
 
@@ -325,6 +329,10 @@ export class ChatService {
         if (evt.type === 'progress') {
           // fetch roda fora da zona do Angular; garante detecção de mudança.
           if (handlers.onProgress) this.zone.run(() => handlers.onProgress!(evt));
+        } else if (evt.type === 'interaction') {
+          if (handlers.onInteraction) this.zone.run(() => handlers.onInteraction!(evt.interaction));
+        } else if (evt.type === 'plan') {
+          if (handlers.onPlan) this.zone.run(() => handlers.onPlan!(evt));
         } else if (evt.type === 'done') {
           finalPayload = evt.payload;
         } else if (evt.type === 'error') {
@@ -334,5 +342,20 @@ export class ChatService {
     }
 
     return finalPayload || { status: 'error', message: 'Stream encerrado sem resposta.', conversation_id: 0 };
+  }
+
+  async respondToCodexInteraction(token: string, payload: Record<string, unknown>): Promise<void> {
+    const response = await fetch(`/api/codex/interactions/${encodeURIComponent(token)}/respond/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (response.ok) return;
+    let message = `HTTP ${response.status}`;
+    try {
+      const body = await response.json();
+      message = body.message || message;
+    } catch {}
+    throw new Error(message);
   }
 }

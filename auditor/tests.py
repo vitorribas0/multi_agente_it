@@ -6,6 +6,9 @@ from django.test import SimpleTestCase, TestCase, override_settings
 
 from .codex_app_server import CodexAppServer
 from .codex_views import (
+    _PENDING_INTERACTIONS,
+    _PENDING_INTERACTIONS_LOCK,
+    _PendingCodexInteraction,
     _artifact_snapshot,
     _codex_trace_record,
     _collect_generated_artifacts,
@@ -72,6 +75,107 @@ class CodexAppServerEventTests(SimpleTestCase):
         self.assertEqual(events[1]["type"], "activity_output")
         self.assertEqual(events[2]["phase"], "completed")
         self.assertEqual(events[3]["type"], "completed")
+
+    def test_routes_interactive_request_and_live_plan(self):
+        client = object.__new__(CodexAppServer)
+        client.cwd = Path("/tmp/chat/artefatos")
+        sent = []
+        client._send = lambda payload: sent.append(payload)
+        client._messages = lambda: iter([
+            {
+                "id": 77,
+                "method": "item/tool/requestUserInput",
+                "params": {"questions": [{"id": "scope", "question": "Qual escopo?"}]},
+            },
+            {
+                "method": "turn/plan/updated",
+                "params": {
+                    "explanation": "Plano inicial",
+                    "plan": [{"step": "Validar escopo", "status": "inProgress"}],
+                },
+            },
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"status": "completed", "error": None}},
+            },
+        ])
+
+        events = list(client.turn(
+            "thread-1",
+            "analise",
+            lambda method, params: {
+                "answers": {params["questions"][0]["id"]: {"answers": ["2026"]}}
+            },
+        ))
+
+        self.assertEqual(sent[0]["params"]["approvalPolicy"], "untrusted")
+        self.assertEqual(sent[1]["id"], 77)
+        self.assertEqual(sent[1]["result"]["answers"]["scope"]["answers"], ["2026"])
+        self.assertEqual(events[0]["type"], "plan")
+        self.assertEqual(events[0]["plan"][0]["status"], "inProgress")
+
+
+class CodexInteractionEndpointTests(TestCase):
+    def tearDown(self):
+        with _PENDING_INTERACTIONS_LOCK:
+            _PENDING_INTERACTIONS.clear()
+
+    def test_submits_all_question_answers(self):
+        pending = _PendingCodexInteraction(
+            conversation_id=1,
+            method="item/tool/requestUserInput",
+            params={"questions": [{"id": "periodo"}, {"id": "formato"}]},
+        )
+        with _PENDING_INTERACTIONS_LOCK:
+            _PENDING_INTERACTIONS["question-token"] = pending
+
+        response = self.client.post(
+            "/api/codex/interactions/question-token/respond/",
+            data=json.dumps({"answers": {"periodo": ["2026"], "formato": ["Excel"]}}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(pending.ready.is_set())
+        self.assertEqual(pending.response["answers"]["periodo"]["answers"], ["2026"])
+
+    def test_grants_only_requested_permissions_for_turn(self):
+        requested = {"network": {"enabled": True}, "fileSystem": None}
+        pending = _PendingCodexInteraction(
+            conversation_id=1,
+            method="item/permissions/requestApproval",
+            params={"permissions": requested},
+        )
+        with _PENDING_INTERACTIONS_LOCK:
+            _PENDING_INTERACTIONS["permission-token"] = pending
+
+        response = self.client.post(
+            "/api/codex/interactions/permission-token/respond/",
+            data=json.dumps({"approve": True, "scope": "turn"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(pending.response, {"permissions": requested, "scope": "turn"})
+
+    def test_cancel_releases_a_pending_question(self):
+        pending = _PendingCodexInteraction(
+            conversation_id=1,
+            method="item/tool/requestUserInput",
+            params={"questions": [{"id": "periodo"}]},
+        )
+        with _PENDING_INTERACTIONS_LOCK:
+            _PENDING_INTERACTIONS["cancel-token"] = pending
+
+        response = self.client.post(
+            "/api/codex/interactions/cancel-token/respond/",
+            data=json.dumps({"cancel": True}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(pending.response, {"answers": {}})
+        self.assertTrue(pending.ready.is_set())
 
 
 class CodexTraceMappingTests(SimpleTestCase):

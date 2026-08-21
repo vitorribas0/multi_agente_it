@@ -165,7 +165,104 @@
       <div class="msg-avatar assistant">🛡️</div>
       <div class="msg-content-wrap">
         <div class="msg-author">Multi-Agentes Auditoria</div>
-        <div class="typing-dots"><span></span><span></span><span></span></div>
+        <div class="typing-dots" *ngIf="!pendingInteraction"><span></span><span></span><span></span></div>
+
+        <section class="agent-plan" *ngIf="livePlan.length">
+          <div class="agent-plan-heading">
+            <span>Plano do agente</span>
+            <small>ao vivo</small>
+          </div>
+          <p *ngIf="livePlanExplanation">{{ livePlanExplanation }}</p>
+          <div class="agent-plan-step" *ngFor="let item of livePlan"
+               [class.plan-active]="item.status === 'inProgress'"
+               [class.plan-done]="item.status === 'completed'">
+            <span class="agent-plan-icon">{{ planIcon(item.status) }}</span>
+            <span>{{ item.step }}</span>
+          </div>
+        </section>
+
+        <section class="agent-interaction" *ngIf="pendingInteraction as interaction">
+          <div class="agent-interaction-heading">
+            <span class="agent-interaction-icon">{{ interaction.kind === 'question' ? '💬' : '🔐' }}</span>
+            <div>
+              <strong>{{ interaction.title }}</strong>
+              <small>A execução está pausada aguardando sua resposta</small>
+            </div>
+          </div>
+
+          <p class="agent-interaction-reason" *ngIf="interaction.reason">{{ interaction.reason }}</p>
+
+          <ng-container *ngIf="interaction.kind === 'question'">
+            <div class="agent-question" *ngFor="let question of interaction.questions || []">
+              <span class="agent-question-header" *ngIf="question.header">{{ question.header }}</span>
+              <label>{{ question.question }}</label>
+              <div class="agent-question-options" *ngIf="question.options?.length">
+                <label class="agent-option" *ngFor="let option of question.options">
+                  <input type="radio" [name]="'codex-' + question.id"
+                         [value]="option.label" [(ngModel)]="interactionAnswers[question.id]" />
+                  <span><strong>{{ option.label }}</strong><small *ngIf="option.description">{{ option.description }}</small></span>
+                </label>
+              </div>
+              <input class="agent-other-input"
+                     *ngIf="question.isOther || !question.options?.length"
+                     [type]="question.isSecret ? 'password' : 'text'"
+                     [(ngModel)]="interactionAnswers[question.id]"
+                     [placeholder]="question.options?.length ? 'Outra resposta…' : 'Digite sua resposta…'" />
+            </div>
+            <div class="agent-interaction-actions">
+              <button class="interaction-primary" type="button"
+                      [disabled]="!interactionQuestionsComplete || interactionSubmitting"
+                      (click)="submitInteractionAnswers()">
+                {{ interactionSubmitting ? 'Enviando…' : 'Responder e continuar' }}
+              </button>
+            </div>
+          </ng-container>
+
+          <ng-container *ngIf="interaction.kind === 'command_approval'">
+            <div class="approval-network" *ngIf="interaction.network as network">
+              Rede: <strong>{{ network.protocol }}://{{ network.host }}</strong>
+            </div>
+            <pre class="approval-command" *ngIf="interaction.command"><code>{{ interaction.command }}</code></pre>
+            <small class="approval-cwd" *ngIf="interaction.cwd">Pasta: {{ interaction.cwd }}</small>
+            <div class="agent-interaction-actions">
+              <button class="interaction-deny" type="button" [disabled]="interactionSubmitting"
+                      (click)="approveInteraction('decline')">Recusar</button>
+              <button type="button" [disabled]="interactionSubmitting"
+                      (click)="approveInteraction('acceptForSession')">Permitir nesta sessão</button>
+              <button class="interaction-primary" type="button" [disabled]="interactionSubmitting"
+                      (click)="approveInteraction('accept')">Permitir uma vez</button>
+            </div>
+          </ng-container>
+
+          <ng-container *ngIf="interaction.kind === 'file_approval'">
+            <div class="approval-network" *ngIf="interaction.grantRoot">
+              Local solicitado: <strong>{{ interaction.grantRoot }}</strong>
+            </div>
+            <div class="agent-interaction-actions">
+              <button class="interaction-deny" type="button" [disabled]="interactionSubmitting"
+                      (click)="approveInteraction('decline')">Recusar</button>
+              <button type="button" [disabled]="interactionSubmitting"
+                      (click)="approveInteraction('acceptForSession')">Permitir nesta sessão</button>
+              <button class="interaction-primary" type="button" [disabled]="interactionSubmitting"
+                      (click)="approveInteraction('accept')">Permitir uma vez</button>
+            </div>
+          </ng-container>
+
+          <ng-container *ngIf="interaction.kind === 'permission_approval'">
+            <pre class="approval-command"><code>{{ interaction.permissions | json }}</code></pre>
+            <div class="agent-interaction-actions">
+              <button class="interaction-deny" type="button" [disabled]="interactionSubmitting"
+                      (click)="approvePermissions(false)">Recusar</button>
+              <button type="button" [disabled]="interactionSubmitting"
+                      (click)="approvePermissions(true, 'session')">Permitir nesta sessão</button>
+              <button class="interaction-primary" type="button" [disabled]="interactionSubmitting"
+                      (click)="approvePermissions(true, 'turn')">Permitir neste turno</button>
+            </div>
+          </ng-container>
+
+          <div class="agent-interaction-error" *ngIf="interactionError">{{ interactionError }}</div>
+        </section>
+
         <div class="progress-log">
           <div *ngFor="let p of progress; trackBy: trackProgress"
                class="progress-line" [class.massiva]="p.massiva">

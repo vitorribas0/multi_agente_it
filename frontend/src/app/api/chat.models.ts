@@ -162,6 +162,45 @@ export interface ChatProgressEvent {
   result_preview?: string;
 }
 
+export interface CodexPlanItem {
+  step: string;
+  status: 'pending' | 'inProgress' | 'completed';
+}
+
+export interface CodexPlanEvent {
+  type: 'plan';
+  explanation?: string;
+  plan: CodexPlanItem[];
+}
+
+export interface CodexInteractionOption {
+  label: string;
+  description?: string;
+}
+
+export interface CodexInteractionQuestion {
+  id: string;
+  header?: string;
+  question: string;
+  isOther?: boolean;
+  isSecret?: boolean;
+  options?: CodexInteractionOption[];
+}
+
+export interface CodexInteraction {
+  token: string;
+  kind: 'question' | 'command_approval' | 'file_approval' | 'permission_approval';
+  title: string;
+  reason?: string;
+  command?: string;
+  cwd?: string;
+  grantRoot?: string;
+  network?: { host?: string; protocol?: string } | null;
+  permissions?: Record<string, unknown>;
+  availableDecisions?: string[];
+  questions?: CodexInteractionQuestion[];
+}
+
 // Nó da árvore de execução ao vivo, montada incrementalmente a partir dos
 // eventos de progresso. Recursivo: um call_agent tem as tools do sub-agente
 // em `children`.

@@ -15,6 +15,11 @@ urlpatterns = [
     path("api/chat/stream/", views.chat_stream, name="chat_stream"),
     path("api/codex/status/", codex_views.codex_status, name="codex_status"),
     path("api/codex/chat/stream/", codex_views.codex_chat_stream, name="codex_chat_stream"),
+    path(
+        "api/codex/interactions/<str:token>/respond/",
+        codex_views.codex_interaction_respond,
+        name="codex_interaction_respond",
+    ),
 
     # Conversas
     path("api/conversations/", views.conversation_list, name="conversation_list"),

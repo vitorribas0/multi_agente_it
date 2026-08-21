@@ -14,7 +14,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 
 _TRACE_ITEM_TYPES = {
@@ -26,6 +26,15 @@ _TRACE_ITEM_TYPES = {
     "webSearch",
     "imageView",
     "contextCompaction",
+}
+
+_APPROVAL_POLICY = "untrusted"
+_SERVER_REQUEST_METHODS = {
+    "item/tool/requestUserInput",
+    "tool/requestUserInput",  # compatibilidade com versões anteriores
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
 }
 
 
@@ -55,7 +64,10 @@ _DEVELOPER_INSTRUCTIONS = (
     "artefato visualizável. "
     "Quando o pedido for para alterar, ampliar ou continuar um HTML já criado, "
     "reescreva e devolva o documento HTML completo atualizado. Nunca responda com "
-    "CSS isolado, fragmentos, diffs ou instruções de edição manual."
+    "CSS isolado, fragmentos, diffs ou instruções de edição manual. Para tarefas "
+    "com várias etapas, publique um plano curto e atualize o andamento durante a "
+    "execução. Quando faltar uma escolha necessária do usuário, use a pergunta "
+    "interativa em vez de encerrar o turno pedindo esclarecimento em texto."
 )
 
 
@@ -184,8 +196,9 @@ class CodexAppServer:
                 "params": {
                     "threadId": thread_id,
                     "cwd": str(self.cwd),
-                    "approvalPolicy": "never",
+                    "approvalPolicy": _APPROVAL_POLICY,
                     "sandbox": "workspace-write",
+                    "config": {"features.default_mode_request_user_input": True},
                     "developerInstructions": _DEVELOPER_INSTRUCTIONS,
                 },
             })
@@ -201,8 +214,9 @@ class CodexAppServer:
             "id": 3,
             "params": {
                 "cwd": str(self.cwd),
-                "approvalPolicy": "never",
+                "approvalPolicy": _APPROVAL_POLICY,
                 "sandbox": "workspace-write",
+                "config": {"features.default_mode_request_user_input": True},
                 "developerInstructions": _DEVELOPER_INSTRUCTIONS,
             },
         })
@@ -212,7 +226,12 @@ class CodexAppServer:
         except (KeyError, TypeError) as exc:
             raise CodexAppServerError("Resposta de thread/start inválida.") from exc
 
-    def turn(self, thread_id: str, prompt: str) -> Iterator[dict]:
+    def turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        server_request_handler: Callable[[str, dict], dict] | None = None,
+    ) -> Iterator[dict]:
         self._send({
             "method": "turn/start",
             "id": 4,
@@ -220,7 +239,7 @@ class CodexAppServer:
                 "threadId": thread_id,
                 "input": [{"type": "text", "text": prompt}],
                 "cwd": str(self.cwd),
-                "approvalPolicy": "never",
+                "approvalPolicy": _APPROVAL_POLICY,
                 "sandboxPolicy": {
                     "type": "workspaceWrite",
                     "writableRoots": [str(self.cwd)],
@@ -237,7 +256,24 @@ class CodexAppServer:
 
             method = message.get("method")
             params = message.get("params") or {}
-            if method == "item/agentMessage/delta":
+            if message.get("id") is not None and method in _SERVER_REQUEST_METHODS:
+                if server_request_handler is None:
+                    if method == "item/permissions/requestApproval":
+                        result = {"permissions": {}, "scope": "turn"}
+                    elif method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
+                        result = {"answers": {}}
+                    else:
+                        result = {"decision": "decline"}
+                else:
+                    result = server_request_handler(method, params)
+                self._send({"id": message["id"], "result": result})
+            elif method == "turn/plan/updated":
+                yield {
+                    "type": "plan",
+                    "explanation": params.get("explanation") or "",
+                    "plan": params.get("plan") or [],
+                }
+            elif method == "item/agentMessage/delta":
                 delta = params.get("delta") or ""
                 if delta:
                     yield {
