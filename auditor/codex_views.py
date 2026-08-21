@@ -53,16 +53,29 @@ def _prepare_session_workspace(conv) -> Path:
 
 
 def _prompt_with_history(conv, text: str, has_codex_thread: bool) -> str:
-    session_hint = (
-        "Os dados anexados a esta conversa, quando existirem, estão materializados "
-        "no diretório atual. Leia primeiro manifesto_sessao.json; ele aponta para "
-        "dataset_atual.json e para todas as abas/datasets nomeados."
-    )
+    state = conv.state or {}
+    has_attached_data = any((
+        state.get("athena_last_result") is not None,
+        bool(state.get("named_datasets")),
+        bool(state.get("excel_workbooks")),
+    ))
+    session_hint = ""
+    if has_attached_data:
+        session_hint = (
+            "Há dados anexados disponíveis na sessão. Somente se o pedido atual "
+            "exigir esses dados, consulte manifesto_sessao.json para localizar o "
+            "dataset atual e as abas/datasets nomeados. Não mencione essa estrutura "
+            "interna na resposta; apresente apenas a análise e suas evidências."
+        )
+
+    def with_hint(value: str) -> str:
+        return f"{session_hint}\n\n{value}" if session_hint else value
+
     if has_codex_thread:
-        return f"{session_hint}\n\n{text}"
+        return with_hint(text)
     previous = list(conv.messages.order_by("created_at").values("role", "content"))[-12:]
     if not previous:
-        return f"{session_hint}\n\n{text}"
+        return with_hint(text)
     history = "\n".join(
         f"{('Usuário' if row['role'] == 'user' else 'Assistente')}: {row['content']}"
         for row in previous if row["content"]
@@ -70,7 +83,7 @@ def _prompt_with_history(conv, text: str, has_codex_thread: bool) -> str:
     return (
         "Considere este histórico importado da interface antiga apenas como contexto:\n"
         f"<historico>\n{history}\n</historico>\n\n"
-        f"{session_hint}\n\nPedido atual do usuário: {text}"
+        + with_hint(f"Pedido atual do usuário: {text}")
     )
 
 

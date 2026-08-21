@@ -20,6 +20,17 @@ class CodexAppServerError(RuntimeError):
     pass
 
 
+_DEVELOPER_INSTRUCTIONS = (
+    "Atue como assistente de auditoria. Responda em português do Brasil e use "
+    "as skills do repositório quando forem pertinentes. Não altere arquivos do "
+    "projeto durante este chat. Converse naturalmente em saudações e perguntas "
+    "gerais. Não mencione diretório de trabalho, manifesto, nomes de arquivos "
+    "internos, sandbox ou infraestrutura, salvo quando o usuário perguntar ou "
+    "quando isso for indispensável para explicar uma análise solicitada. Só "
+    "inspecione os arquivos da sessão quando o pedido envolver dados anexados."
+)
+
+
 class CodexAppServer:
     def __init__(self, cwd: Path):
         executable = shutil.which("codex")
@@ -103,6 +114,7 @@ class CodexAppServer:
                     "cwd": str(self.cwd),
                     "approvalPolicy": "never",
                     "sandbox": "read-only",
+                    "developerInstructions": _DEVELOPER_INSTRUCTIONS,
                 },
             })
             try:
@@ -119,11 +131,7 @@ class CodexAppServer:
                 "cwd": str(self.cwd),
                 "approvalPolicy": "never",
                 "sandbox": "read-only",
-                "developerInstructions": (
-                    "Atue como assistente de auditoria. Responda em português do Brasil. "
-                    "Use as skills do repositório quando forem pertinentes e não altere "
-                    "arquivos do projeto durante este chat."
-                ),
+                "developerInstructions": _DEVELOPER_INSTRUCTIONS,
             },
         })
         result = self._wait_response(3)
