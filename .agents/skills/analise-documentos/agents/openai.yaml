@@ -1,0 +1,3 @@
+interface:
+  display_name: "Análise de Documentos"
+  short_description: "Extrai evidências e citações de arquivos"

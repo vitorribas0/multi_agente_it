@@ -28,6 +28,7 @@ export interface ChatStreamRequest {
   message: string;
   conversation_id: number | null;
   agent_slug: string | null;
+  engine?: 'codex' | 'legacy';
   active_kbs?: unknown[];
   active_knowledge?: unknown[];
   // Vínculo de playbook. undefined = não mexe; null = desvincula; número = vincula.
@@ -278,7 +279,8 @@ export class ChatService {
 
     let response: Response;
     try {
-      response = await fetch('/api/chat/stream/', {
+      const endpoint = req.engine === 'codex' ? '/api/codex/chat/stream/' : '/api/chat/stream/';
+      response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

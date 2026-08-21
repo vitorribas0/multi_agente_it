@@ -1,0 +1,3 @@
+interface:
+  display_name: "AWS Athena"
+  short_description: "Consulta dados AWS com segurança"

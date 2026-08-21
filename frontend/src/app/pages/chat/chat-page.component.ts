@@ -77,6 +77,30 @@ import { PlaybookPickerComponent } from './playbook-picker.component';
       flex-direction: column;
       min-height: 0;
     }
+    .engine-switch {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg-elevated);
+    }
+    .engine-switch button {
+      border: 0;
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: var(--text-secondary);
+      background: transparent;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .engine-switch button.active {
+      color: #fff;
+      background: linear-gradient(135deg, #EC7000, #ff9d00);
+      box-shadow: 0 3px 12px rgba(236, 112, 0, .24);
+    }
+    .codex-dot { background: #22c55e !important; box-shadow: 0 0 9px rgba(34,197,94,.7) !important; }
   `],
 })
 export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -92,6 +116,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   agents: AgentInfo[] = [];
   selectedAgentSlug: string | null = null;
   conversationId: number | null = null;
+  engine: 'codex' | 'legacy' = 'codex';
 
   input = '';
   isLoading = false;
@@ -311,6 +336,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
           message: text,
           conversation_id: this.conversationId,
           agent_slug: this.selectedAgentSlug,
+          engine: this.engine,
           active_kbs: this.activeKbs,
           active_knowledge: this.activeKnowledge,
           // Só enviado quando há vínculo pendente (conversa nova); nas demais

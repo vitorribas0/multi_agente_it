@@ -1,0 +1,3 @@
+interface:
+  display_name: "Auditoria Interna"
+  short_description: "Planeja testes e achados rastreáveis"

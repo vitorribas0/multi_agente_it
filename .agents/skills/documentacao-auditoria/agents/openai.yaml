@@ -1,0 +1,3 @@
+interface:
+  display_name: "Documentação de Auditoria"
+  short_description: "Gera relatórios HTML e PDF executivos"

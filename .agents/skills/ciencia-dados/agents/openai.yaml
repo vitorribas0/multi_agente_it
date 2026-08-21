@@ -1,0 +1,3 @@
+interface:
+  display_name: "Ciência de Dados"
+  short_description: "Analisa datasets, clusters e anomalias"

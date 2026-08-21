@@ -1,6 +1,7 @@
 from django.urls import path
 from . import views
 from . import gateway_views
+from . import codex_views
 
 app_name = "auditor"
 
@@ -12,6 +13,8 @@ urlpatterns = [
     # Chat
     path("api/chat/", views.chat_message, name="chat_message"),
     path("api/chat/stream/", views.chat_stream, name="chat_stream"),
+    path("api/codex/status/", codex_views.codex_status, name="codex_status"),
+    path("api/codex/chat/stream/", codex_views.codex_chat_stream, name="codex_chat_stream"),
 
     # Conversas
     path("api/conversations/", views.conversation_list, name="conversation_list"),
