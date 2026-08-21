@@ -283,7 +283,7 @@ export class SessionAgentModalComponent implements OnChanges {
       try {
         const data = JSON.parse(String(e.target?.result));
         if (data._kind && data._kind !== 'tech-auditor.session-agent') {
-          if (!confirm('Este arquivo não parece ser um agente do Vitor_companhia. Importar mesmo assim?')) return;
+          if (!confirm('Este arquivo não parece ser um agente do Multi-Agentes Auditoria. Importar mesmo assim?')) return;
         }
         this.fillForm(data);
       } catch (err: any) {

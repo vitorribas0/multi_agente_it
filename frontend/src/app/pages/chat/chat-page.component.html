@@ -1,6 +1,6 @@
 <div class="chat-container">
   <header class="chat-header">
-    <span class="chat-header-title">Vitor_companhia</span>
+    <span class="chat-header-title">Multi-Agentes Auditoria</span>
     <div class="header-controls">
       <div class="files-wrap">
         <button class="conversation-files-btn" type="button"
@@ -112,7 +112,7 @@
         {{ m.role === 'user' ? 'V' : '🛡️' }}
       </div>
       <div class="msg-content-wrap">
-        <div class="msg-author">{{ m.role === 'user' ? 'Você' : 'Vitor_companhia' }}</div>
+        <div class="msg-author">{{ m.role === 'user' ? 'Você' : 'Multi-Agentes Auditoria' }}</div>
 
         <!-- Processo persistido: pode ser reaberto depois que o turno termina. -->
         <details class="execution-history" *ngIf="(m.tool_calls || []).length">
@@ -164,7 +164,7 @@
     <div class="typing-row" *ngIf="typing">
       <div class="msg-avatar assistant">🛡️</div>
       <div class="msg-content-wrap">
-        <div class="msg-author">Vitor_companhia</div>
+        <div class="msg-author">Multi-Agentes Auditoria</div>
         <div class="typing-dots" *ngIf="!pendingInteraction"><span></span><span></span><span></span></div>
 
         <section class="agent-plan" *ngIf="livePlan.length">
