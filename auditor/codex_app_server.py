@@ -27,7 +27,10 @@ _DEVELOPER_INSTRUCTIONS = (
     "gerais. Não mencione diretório de trabalho, manifesto, nomes de arquivos "
     "internos, sandbox ou infraestrutura, salvo quando o usuário perguntar ou "
     "quando isso for indispensável para explicar uma análise solicitada. Só "
-    "inspecione os arquivos da sessão quando o pedido envolver dados anexados."
+    "inspecione os arquivos da sessão quando o pedido envolver dados anexados. "
+    "Quando o usuário pedir relatório ou dashboard HTML, entregue um documento "
+    "HTML completo, standalone e sem recursos externos após um resumo curto; a "
+    "aplicação converterá o documento automaticamente em artefato visualizável."
 )
 
 

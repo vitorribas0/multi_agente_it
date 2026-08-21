@@ -16,6 +16,60 @@ from django.views.decorators.http import require_GET
 from .codex_app_server import CodexAppServer, CodexAppServerError
 from .models import Message
 from .views import _message_payload, _resolve_conversation
+from tools.gerar_html import gerar_html
+
+
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+
+def _split_html_response(answer: str) -> tuple[str, str | None]:
+    """Separa texto explicativo de um documento HTML completo retornado inline."""
+    lowered = answer.lower()
+    starts = [pos for pos in (lowered.find("<!doctype html"), lowered.find("<html")) if pos >= 0]
+    if not starts:
+        return answer, None
+    start = min(starts)
+    end = lowered.rfind("</html>")
+    if end < start:
+        return answer, None
+    end += len("</html>")
+
+    html = answer[start:end].strip()
+    before = answer[:start].strip()
+    after = answer[end:].strip()
+    # Remove somente as cercas externas que normalmente envolvem o documento.
+    before = re.sub(r"```(?:html|htm)?\s*$", "", before, flags=re.IGNORECASE).strip()
+    after = re.sub(r"^```", "", after).strip()
+    visible_text = "\n\n".join(part for part in (before, after) if part).strip()
+    return visible_text, html
+
+
+def _materialize_html_response(answer: str) -> tuple[str, list[dict]]:
+    """Converte HTML inline do Codex no attachment já entendido pelo Angular."""
+    visible_text, html = _split_html_response(answer)
+    if html is None:
+        return answer, []
+
+    title_match = _HTML_TITLE_RE.search(html)
+    title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else "Relatório"
+    session: dict = {}
+    raw_result = gerar_html(
+        _session=session,
+        html=html,
+        titulo=title or "Relatório",
+        nome_arquivo="relatorio_codex",
+    )
+    try:
+        result = json.loads(raw_result)
+    except (TypeError, json.JSONDecodeError):
+        result = {"erro": "Resposta inválida ao salvar HTML."}
+    if result.get("erro"):
+        return answer, []
+
+    attachments = session.get("__pending_attachments") or []
+    if not visible_text:
+        visible_text = "Relatório HTML gerado. Use **Visualizar** para abrir o painel interativo."
+    return visible_text, attachments
 
 
 def _prepare_session_workspace(conv) -> Path:
@@ -162,7 +216,13 @@ def codex_chat_stream(request):
             answer = "".join(answer_parts).strip()
             if not answer:
                 answer = "O Codex concluiu o turno sem produzir uma mensagem de texto."
-            assistant = Message.objects.create(conversation=conv, role="assistant", content=answer)
+            answer, attachments = _materialize_html_response(answer)
+            assistant = Message.objects.create(
+                conversation=conv,
+                role="assistant",
+                content=answer,
+                attachments=attachments,
+            )
             events.put({
                 "type": "done",
                 "payload": {
