@@ -1176,6 +1176,18 @@ body.html-preview-open:not(.html-preview-full) .main {
   background: linear-gradient(135deg, #ec7000, #ff8f2d);
 }
 
+.agent-interaction-actions button.interaction-approve-all {
+  border-color: rgba(34, 197, 94, .58);
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, .1);
+}
+
+.agent-interaction-actions button.interaction-approve-all:hover:not(:disabled) {
+  border-color: #22c55e;
+  color: #dcfce7;
+  background: rgba(34, 197, 94, .16);
+}
+
 .agent-interaction-actions button.interaction-deny:hover:not(:disabled) {
   border-color: #ef4444;
   color: #fca5a5;

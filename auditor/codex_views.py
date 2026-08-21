@@ -133,6 +133,18 @@ def _safe_interaction_fallback(method: str) -> dict:
     return {"decision": "decline"}
 
 
+def _approve_interaction_for_turn(method: str, params: dict) -> dict:
+    """Aprova uma solicitação sem ampliar o escopo além do turno atual."""
+    if method == "item/permissions/requestApproval":
+        return {
+            "permissions": params.get("permissions") or {},
+            "scope": "turn",
+        }
+    if method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
+        return {"answers": {}}
+    return {"decision": "accept"}
+
+
 def _wait_for_interaction(conv, events: "queue.Queue[dict]", method: str, params: dict) -> dict:
     token = uuid4().hex
     pending = _PendingCodexInteraction(conv.id, method, params)
@@ -189,7 +201,17 @@ def codex_interaction_respond(request, token: str):
         if pending.response is not None:
             return JsonResponse({"status": "error", "message": "Solicitação já respondida."}, status=409)
 
-        if data.get("cancel") is True:
+        if data.get("approve_all") is True:
+            if pending.method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
+                return JsonResponse(
+                    {"status": "error", "message": "Perguntas precisam ser respondidas."},
+                    status=400,
+                )
+            pending.response = {
+                **_approve_interaction_for_turn(pending.method, pending.params),
+                "__approve_all_for_turn__": True,
+            }
+        elif data.get("cancel") is True:
             pending.response = _safe_interaction_fallback(pending.method)
         elif pending.method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
             raw_answers = data.get("answers") or {}
@@ -801,6 +823,7 @@ def codex_chat_stream(request):
 
     def worker() -> None:
         answer_parts: list[str] = []
+        approve_all_for_turn = False
         trace_records: dict[str, dict] = {}
         trace_started_at: dict[str, float] = {}
         trace_output: dict[str, str] = {}
@@ -820,13 +843,38 @@ def codex_chat_stream(request):
                 events.put({"type": "progress", "stage": "thinking", "icon": "🛡️", "text": "Sandbox isolado · escrita restrita aos artefatos deste chat"})
 
                 def collect_turn(turn_prompt: str) -> str:
+                    nonlocal approve_all_for_turn
+
+                    def handle_server_request(method: str, params: dict) -> dict:
+                        nonlocal approve_all_for_turn
+                        is_question = method in {
+                            "item/tool/requestUserInput",
+                            "tool/requestUserInput",
+                        }
+                        if approve_all_for_turn and not is_question:
+                            events.put({
+                                "type": "progress",
+                                "stage": "thinking",
+                                "icon": "🔓",
+                                "text": "Aprovação automática ativa nesta execução",
+                            })
+                            return _approve_interaction_for_turn(method, params)
+                        result = _wait_for_interaction(conv, events, method, params)
+                        if result.pop("__approve_all_for_turn__", False):
+                            approve_all_for_turn = True
+                            events.put({
+                                "type": "progress",
+                                "stage": "thinking",
+                                "icon": "🔓",
+                                "text": "Todas as próximas ações desta execução foram autorizadas",
+                            })
+                        return result
+
                     parts: list[str] = []
                     for event in client.turn(
                         thread_id,
                         turn_prompt,
-                        server_request_handler=lambda method, params: _wait_for_interaction(
-                            conv, events, method, params
-                        ),
+                        server_request_handler=handle_server_request,
                     ):
                         if event["type"] == "delta" and event.get("phase") != "commentary":
                             parts.append(event["text"])

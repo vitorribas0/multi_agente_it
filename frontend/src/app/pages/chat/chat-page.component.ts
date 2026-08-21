@@ -460,6 +460,10 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     await this.respondToInteraction({ approve, scope });
   }
 
+  async approveAllInteraction(): Promise<void> {
+    await this.respondToInteraction({ approve_all: true });
+  }
+
   private async respondToInteraction(payload: Record<string, unknown>): Promise<void> {
     const interaction = this.pendingInteraction;
     if (!interaction || this.interactionSubmitting) return;

@@ -229,6 +229,8 @@
                       (click)="approveInteraction('decline')">Recusar</button>
               <button type="button" [disabled]="interactionSubmitting"
                       (click)="approveInteraction('acceptForSession')">Permitir nesta sessão</button>
+              <button class="interaction-approve-all" type="button" [disabled]="interactionSubmitting"
+                      (click)="approveAllInteraction()">Aprovar tudo nesta execução</button>
               <button class="interaction-primary" type="button" [disabled]="interactionSubmitting"
                       (click)="approveInteraction('accept')">Permitir uma vez</button>
             </div>
@@ -243,6 +245,8 @@
                       (click)="approveInteraction('decline')">Recusar</button>
               <button type="button" [disabled]="interactionSubmitting"
                       (click)="approveInteraction('acceptForSession')">Permitir nesta sessão</button>
+              <button class="interaction-approve-all" type="button" [disabled]="interactionSubmitting"
+                      (click)="approveAllInteraction()">Aprovar tudo nesta execução</button>
               <button class="interaction-primary" type="button" [disabled]="interactionSubmitting"
                       (click)="approveInteraction('accept')">Permitir uma vez</button>
             </div>
@@ -255,6 +259,8 @@
                       (click)="approvePermissions(false)">Recusar</button>
               <button type="button" [disabled]="interactionSubmitting"
                       (click)="approvePermissions(true, 'session')">Permitir nesta sessão</button>
+              <button class="interaction-approve-all" type="button" [disabled]="interactionSubmitting"
+                      (click)="approveAllInteraction()">Aprovar tudo nesta execução</button>
               <button class="interaction-primary" type="button" [disabled]="interactionSubmitting"
                       (click)="approvePermissions(true, 'turn')">Permitir neste turno</button>
             </div>

@@ -177,6 +177,26 @@ class CodexInteractionEndpointTests(TestCase):
         self.assertEqual(pending.response, {"answers": {}})
         self.assertTrue(pending.ready.is_set())
 
+    def test_approve_all_accepts_current_command_and_marks_the_turn(self):
+        pending = _PendingCodexInteraction(
+            conversation_id=1,
+            method="item/commandExecution/requestApproval",
+            params={"command": "python analisar.py"},
+        )
+        with _PENDING_INTERACTIONS_LOCK:
+            _PENDING_INTERACTIONS["approve-all-token"] = pending
+
+        response = self.client.post(
+            "/api/codex/interactions/approve-all-token/respond/",
+            data=json.dumps({"approve_all": True}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(pending.response["decision"], "accept")
+        self.assertTrue(pending.response["__approve_all_for_turn__"])
+        self.assertTrue(pending.ready.is_set())
+
 
 class CodexTraceMappingTests(SimpleTestCase):
     def test_maps_command_to_persistable_trace(self):
