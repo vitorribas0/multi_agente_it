@@ -6,6 +6,7 @@ import json
 import queue
 import re
 import threading
+import unicodedata
 from pathlib import Path
 
 from django.conf import settings
@@ -20,6 +21,7 @@ from tools.gerar_html import gerar_html
 
 
 _HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_HTML_EXPORT_PREFIX = "/api/exports/"
 
 
 def _split_html_response(answer: str) -> tuple[str, str | None]:
@@ -72,6 +74,69 @@ def _materialize_html_response(answer: str) -> tuple[str, list[dict]]:
     return visible_text, attachments
 
 
+def _normalize_request(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text.lower())
+    return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
+def _is_html_revision_request(text: str) -> bool:
+    """Reconhece referências explícitas a um artefato HTML já criado."""
+    normalized = _normalize_request(text)
+    artifact = r"(?:html|relatorio|dashboard|pagina|artefato)"
+    reference = r"(?:nesse|neste|naquele|no\s+mesmo|o\s+mesmo|mesmo|anterior|acima|existente|ultimo)"
+    return bool(
+        re.search(rf"\b{reference}\b.{{0,60}}\b{artifact}\b", normalized)
+        or re.search(rf"\b{artifact}\b.{{0,60}}\b{reference}\b", normalized)
+    )
+
+
+def _latest_html_artifact(conv) -> str | None:
+    """Lê com segurança o HTML do attachment mais recente da conversa."""
+    export_dir = (Path(settings.BASE_DIR) / "exports").resolve()
+    for message in conv.messages.order_by("-created_at"):
+        for attachment in reversed(message.attachments or []):
+            if attachment.get("kind") != "export" or attachment.get("formato") != "html":
+                continue
+            download_url = str(attachment.get("download_url") or "")
+            if not download_url.startswith(_HTML_EXPORT_PREFIX):
+                continue
+            filename = Path(download_url.removeprefix(_HTML_EXPORT_PREFIX)).name
+            candidate = (export_dir / filename).resolve()
+            if candidate.parent != export_dir or candidate.suffix.lower() not in {".html", ".htm"}:
+                continue
+            try:
+                return candidate.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+    return None
+
+
+def _html_revision_context(conv, text: str) -> str:
+    if not _is_html_revision_request(text):
+        return ""
+    html = _latest_html_artifact(conv)
+    if not html:
+        return ""
+    return (
+        "Você está editando o último artefato HTML desta conversa. Aplique o pedido "
+        "ao documento abaixo e devolva obrigatoriamente o documento HTML completo e "
+        "standalone, do <!doctype html> até </html>. Não devolva CSS isolado, trechos, "
+        "diff, tutorial ou instruções para o usuário editar manualmente. Preserve o "
+        "conteúdo existente que não foi alvo do pedido.\n\n"
+        "<artefato_html_anterior>\n"
+        f"{html}\n"
+        "</artefato_html_anterior>"
+    )
+
+
+def _revision_output_requirement() -> str:
+    return (
+        "REQUISITO OBRIGATÓRIO DE SAÍDA: responda com o HTML atualizado inteiro, "
+        "começando por <!doctype html> e terminando em </html>. Não diga ao usuário "
+        "para inserir ou substituir trechos."
+    )
+
+
 def _prepare_session_workspace(conv) -> Path:
     """Materializa datasets do Django como arquivos legíveis pelo sandbox."""
     workspace = Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conv.id)
@@ -113,17 +178,26 @@ def _prompt_with_history(conv, text: str, has_codex_thread: bool) -> str:
         bool(state.get("named_datasets")),
         bool(state.get("excel_workbooks")),
     ))
-    session_hint = ""
+    hints: list[str] = []
     if has_attached_data:
-        session_hint = (
+        hints.append(
             "Há dados anexados disponíveis na sessão. Somente se o pedido atual "
             "exigir esses dados, consulte manifesto_sessao.json para localizar o "
             "dataset atual e as abas/datasets nomeados. Não mencione essa estrutura "
             "interna na resposta; apresente apenas a análise e suas evidências."
         )
 
+    revision_context = _html_revision_context(conv, text)
+    if revision_context:
+        hints.append(revision_context)
+
+    session_hint = "\n\n".join(hints)
+
     def with_hint(value: str) -> str:
-        return f"{session_hint}\n\n{value}" if session_hint else value
+        prompted = f"{session_hint}\n\n{value}" if session_hint else value
+        if revision_context:
+            prompted = f"{prompted}\n\n{_revision_output_requirement()}"
+        return prompted
 
     if has_codex_thread:
         return with_hint(text)
@@ -179,6 +253,9 @@ def codex_chat_stream(request):
 
     state = dict(conv.state or {})
     old_thread_id = state.get("codex_thread_id")
+    revision_html = (
+        _latest_html_artifact(conv) if _is_html_revision_request(text) else None
+    )
     prompt = _prompt_with_history(conv, text, bool(old_thread_id))
     Message.objects.create(conversation=conv, role="user", content=text)
 
@@ -204,14 +281,46 @@ def codex_chat_stream(request):
                     "mcpToolCall": "Consultando ferramenta autorizada",
                     "webSearch": "Pesquisando fonte externa",
                 }
-                for event in client.turn(thread_id, prompt):
-                    if event["type"] == "delta" and event.get("phase") != "commentary":
-                        answer_parts.append(event["text"])
-                    elif event["type"] == "activity":
-                        label = activity_labels.get(event["activity"], "Processando")
-                        events.put({"type": "progress", "stage": "tool", "icon": "⚙️", "text": label})
-                    elif event["type"] == "completed" and event.get("status") != "completed":
-                        raise CodexAppServerError(str(event.get("error") or "Turno não concluído."))
+
+                def collect_turn(turn_prompt: str) -> str:
+                    parts: list[str] = []
+                    for event in client.turn(thread_id, turn_prompt):
+                        if event["type"] == "delta" and event.get("phase") != "commentary":
+                            parts.append(event["text"])
+                        elif event["type"] == "activity":
+                            label = activity_labels.get(event["activity"], "Processando")
+                            events.put({
+                                "type": "progress",
+                                "stage": "tool",
+                                "icon": "⚙️",
+                                "text": label,
+                            })
+                        elif event["type"] == "completed" and event.get("status") != "completed":
+                            raise CodexAppServerError(
+                                str(event.get("error") or "Turno não concluído.")
+                            )
+                    return "".join(parts).strip()
+
+                answer = collect_turn(prompt)
+                if revision_html and _split_html_response(answer)[1] is None:
+                    events.put({
+                        "type": "progress",
+                        "stage": "thinking",
+                        "icon": "◇",
+                        "text": "Consolidando a nova versão completa do HTML",
+                    })
+                    repair_prompt = (
+                        "A resposta anterior ficou incompleta porque trouxe apenas "
+                        "instruções ou fragmentos. Refaça agora o pedido original: "
+                        f"{text}\n\n{_revision_output_requirement()}\n\n"
+                        "Use este documento como base e preserve o restante:\n"
+                        "<artefato_html_anterior>\n"
+                        f"{revision_html}\n"
+                        "</artefato_html_anterior>"
+                    )
+                    answer = collect_turn(repair_prompt)
+
+                answer_parts.append(answer)
 
             answer = "".join(answer_parts).strip()
             if not answer:

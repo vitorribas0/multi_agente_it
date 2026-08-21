@@ -30,7 +30,10 @@ _DEVELOPER_INSTRUCTIONS = (
     "inspecione os arquivos da sessão quando o pedido envolver dados anexados. "
     "Quando o usuário pedir relatório ou dashboard HTML, entregue um documento "
     "HTML completo, standalone e sem recursos externos após um resumo curto; a "
-    "aplicação converterá o documento automaticamente em artefato visualizável."
+    "aplicação converterá o documento automaticamente em artefato visualizável. "
+    "Quando o pedido for para alterar, ampliar ou continuar um HTML já criado, "
+    "reescreva e devolva o documento HTML completo atualizado. Nunca responda com "
+    "CSS isolado, fragmentos, diffs ou instruções de edição manual."
 )
 
 
