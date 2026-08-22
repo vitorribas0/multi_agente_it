@@ -8,6 +8,7 @@
     <button class="config-tab" [class.active]="activeTab === 'general'" (click)="setTab('general')">⚙️ Geral</button>
     <button class="config-tab" [class.active]="activeTab === 'agents'" (click)="setTab('agents')">🤖 Agentes</button>
     <button class="config-tab" [class.active]="activeTab === 'knowledge'" (click)="setTab('knowledge')">📚 Conhecimentos</button>
+    <button class="config-tab" [class.active]="activeTab === 'skills'" (click)="setTab('skills')">✦ Skills</button>
     <button class="config-tab" [class.active]="activeTab === 'tools'" (click)="setTab('tools')">⚡ Tools</button>
   </div>
 
@@ -180,6 +181,62 @@
             <button class="btn btn-primary" [disabled]="card._saving" (click)="saveKnowledge(card)">💾 Salvar</button>
             <button class="btn btn-danger" (click)="deleteKnowledge(card)">🗑️ Excluir</button>
             <span class="save-status" [ngClass]="card._status.kind">{{ card._status.text }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Skills ─────────────────────────────────────────────────── -->
+  <div class="config-panel" [class.active]="activeTab === 'skills'">
+    <div class="knowledge-intro">
+      <p class="config-info">
+        Skills são os prompts operacionais reais da Atena. Cada card é salvo como
+        <code>.agents/skills/&lt;nome&gt;/SKILL.md</code> e pode ser lido no chat.
+      </p>
+      <button class="btn btn-primary" (click)="addSkillCard()">＋ Nova skill</button>
+    </div>
+
+    <div class="config-loading" *ngIf="skillsLoading">Carregando skills…</div>
+
+    <div *ngIf="!skillsLoading">
+      <p class="config-info" *ngIf="!skillCards.length">Nenhuma skill cadastrada ainda.</p>
+
+      <div class="agent-card knowledge-card" *ngFor="let skill of skillCards; trackBy: trackSkill">
+        <div class="agent-card-header">
+          <div class="agent-card-icon">✦</div>
+          <div class="agent-card-title">
+            <h3>{{ skill._new ? 'Nova skill' : skill.name }}</h3>
+            <p>{{ skill._new ? 'Crie o prompt operacional que a Atena deverá seguir.' : skill.description }}</p>
+          </div>
+        </div>
+        <div class="agent-card-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Nome visível</label>
+              <input type="text" class="form-select" maxlength="120" [(ngModel)]="skill.name" placeholder="Ex.: Revisão de contratos">
+            </div>
+            <div class="form-group">
+              <label>Identificador</label>
+              <input type="text" class="form-select" maxlength="63" [(ngModel)]="skill.slug" [readonly]="!skill._new"
+                     placeholder="Ex.: revisao-contratos">
+              <div class="range-hint"><span>letras, números e hífens</span></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Descrição curta</label>
+            <input type="text" class="form-select" maxlength="240" [(ngModel)]="skill.description"
+                   placeholder="Quando e para que a Atena deve usar esta skill">
+          </div>
+          <div class="form-group">
+            <label>Prompt da skill (SKILL.md)</label>
+            <textarea class="form-textarea skill-prompt-editor" rows="16" [(ngModel)]="skill.prompt"
+                      placeholder="Escreva o prompt completo da skill."></textarea>
+          </div>
+          <div class="agent-actions">
+            <button class="btn btn-primary" [disabled]="skill._saving" (click)="saveSkill(skill)">💾 Salvar skill</button>
+            <button class="btn btn-danger" [disabled]="skill._saving" (click)="deleteSkill(skill)">🗑️ Excluir</button>
+            <span class="save-status" [ngClass]="skill._status.kind">{{ skill._status.text }}</span>
           </div>
         </div>
       </div>

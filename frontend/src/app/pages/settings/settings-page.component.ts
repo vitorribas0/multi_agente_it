@@ -7,10 +7,11 @@ import {
   AgentInfo,
   ConfigOverview,
   Knowledge,
+  Skill,
   ToolInfo,
 } from '../../api/config.models';
 
-type TabKey = 'general' | 'agents' | 'knowledge' | 'tools';
+type TabKey = 'general' | 'agents' | 'knowledge' | 'skills' | 'tools';
 type StatusKind = '' | 'success' | 'error';
 
 interface SaveStatus {
@@ -32,6 +33,12 @@ interface KnowledgeEdit {
   name: string;
   description: string;
   prompt: string;
+  _status: SaveStatus;
+  _saving: boolean;
+}
+
+interface SkillEdit extends Skill {
+  _new: boolean;
   _status: SaveStatus;
   _saving: boolean;
 }
@@ -76,11 +83,16 @@ export class SettingsPageComponent implements OnInit {
   knowledgeLoading = true;
   knowledgeCards: KnowledgeEdit[] = [];
 
+  // Skills: arquivos reais SKILL.md usados pela Atena.
+  skillsLoading = true;
+  skillCards: SkillEdit[] = [];
+
   constructor(private api: ConfigService) {}
 
   ngOnInit(): void {
     this.loadConfig();
     this.loadKnowledge();
+    this.loadSkills();
   }
 
   setTab(tab: TabKey): void {
@@ -276,6 +288,63 @@ export class SettingsPageComponent implements OnInit {
     };
   }
 
+  // ── Skills ──────────────────────────────────────────────────────
+  private loadSkills(): void {
+    this.skillsLoading = true;
+    this.api.listSkills().subscribe({
+      next: (data) => {
+        this.skillCards = (data.skills || []).map((skill) => this.toSkillEdit(skill));
+        this.skillsLoading = false;
+      },
+      error: () => {
+        this.skillCards = [];
+        this.skillsLoading = false;
+      },
+    });
+  }
+
+  private toSkillEdit(skill: Skill): SkillEdit {
+    return { ...skill, _new: false, _status: { text: '', kind: '' }, _saving: false };
+  }
+
+  addSkillCard(): void {
+    if (this.skillCards.some((skill) => skill._new)) return;
+    this.skillCards.unshift({
+      slug: '', name: '', description: '',
+      prompt: '---\nname: minha-skill\ndescription: ""\n---\n\n# Minha skill\n\nDescreva aqui as instruções que a Atena deve seguir.\n',
+      _new: true, _status: { text: '', kind: '' }, _saving: false,
+    });
+  }
+
+  saveSkill(skill: SkillEdit): void {
+    const payload = {
+      slug: skill.slug.trim(), name: skill.name.trim(), description: skill.description.trim(), prompt: skill.prompt.trim(),
+    };
+    if (!payload.name || !payload.prompt) {
+      skill._status = { text: '❌ Nome e prompt são obrigatórios', kind: 'error' };
+      return;
+    }
+    skill._saving = true;
+    skill._status = { text: '⏳ Salvando…', kind: '' };
+    this.api.saveSkill(payload).subscribe({
+      next: (data) => {
+        if (data.status === 'success') this.loadSkills();
+        else { skill._status = { text: '❌ ' + (data.message || 'Erro ao salvar'), kind: 'error' }; skill._saving = false; }
+      },
+      error: (e) => { skill._status = { text: '❌ ' + this.httpErr(e), kind: 'error' }; skill._saving = false; },
+    });
+  }
+
+  deleteSkill(skill: SkillEdit): void {
+    if (skill._new) { this.skillCards = this.skillCards.filter((item) => item !== skill); return; }
+    if (!confirm(`Excluir a skill "${skill.name}"? O arquivo SKILL.md será removido.`)) return;
+    skill._saving = true;
+    this.api.deleteSkill(skill.slug).subscribe({
+      next: (data) => data.status === 'success' ? this.loadSkills() : skill._status = { text: '❌ ' + (data.message || 'Erro ao excluir'), kind: 'error' },
+      error: (e) => { skill._status = { text: '❌ ' + this.httpErr(e), kind: 'error' }; skill._saving = false; },
+    });
+  }
+
   addKnowledgeCard(): void {
     // Evita abrir dois formulários de criação simultâneos.
     if (this.knowledgeCards.some((c) => c.id === null)) return;
@@ -370,6 +439,7 @@ export class SettingsPageComponent implements OnInit {
   trackAgent = (_: number, a: AgentEdit) => a.slug;
   trackTool = (_: number, t: ToolInfo) => t.slug;
   trackKnowledge = (_: number, k: KnowledgeEdit) => (k.id === null ? 'new' : k.id);
+  trackSkill = (_: number, skill: SkillEdit) => (skill._new ? 'new' : skill.slug);
 
   paramEntries(t: ToolInfo): Array<{ key: string; type: string; required: boolean }> {
     return Object.entries(t.parameters || {}).map(([key, meta]) => ({

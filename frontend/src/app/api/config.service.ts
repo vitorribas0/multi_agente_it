@@ -7,6 +7,8 @@ import {
   AgentSavePayload,
   KnowledgePayload,
   Knowledge,
+  Skill,
+  SkillPayload,
   WriteResult,
 } from './config.models';
 
@@ -44,5 +46,18 @@ export class ConfigService {
 
   deleteKnowledge(id: number): Observable<WriteResult> {
     return this.http.post<WriteResult>(`/api/knowledge/${id}/delete/`, {});
+  }
+
+  // ── Skills reais da Atena (.agents/skills/*/SKILL.md) ──────────
+  listSkills(): Observable<{ skills: Skill[] }> {
+    return this.http.get<{ skills: Skill[] }>('/api/codex/skills/');
+  }
+
+  saveSkill(payload: SkillPayload): Observable<WriteResult<Skill>> {
+    return this.http.post<WriteResult<Skill>>('/api/codex/skills/', payload);
+  }
+
+  deleteSkill(slug: string): Observable<WriteResult> {
+    return this.http.delete<WriteResult>(`/api/codex/skills/${encodeURIComponent(slug)}/`);
   }
 }

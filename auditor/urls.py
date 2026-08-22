@@ -15,6 +15,7 @@ urlpatterns = [
     path("api/chat/stream/", views.chat_stream, name="chat_stream"),
     path("api/codex/status/", codex_views.codex_status, name="codex_status"),
     path("api/codex/skills/", codex_views.codex_skills, name="codex_skills"),
+    path("api/codex/skills/<slug:slug>/", codex_views.codex_skill_delete, name="codex_skill_delete"),
     path("api/codex/chat/stream/", codex_views.codex_chat_stream, name="codex_chat_stream"),
     path(
         "api/codex/interactions/<str:token>/respond/",

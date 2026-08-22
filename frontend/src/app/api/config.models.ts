@@ -72,3 +72,17 @@ export interface KnowledgePayload {
   description: string;
   prompt: string;
 }
+
+export interface Skill {
+  slug: string;
+  name: string;
+  description: string;
+  prompt: string;
+}
+
+export interface SkillPayload {
+  slug?: string;
+  name: string;
+  description: string;
+  prompt: string;
+}

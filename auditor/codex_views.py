@@ -17,7 +17,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_http_methods
 
 from .codex_app_server import CodexAppServer, CodexAppServerError
 from .models import Conversation, Message, ToolCall
@@ -860,21 +860,89 @@ def codex_status(_request):
     })
 
 
-@require_GET
-def codex_skills(_request):
-    """Expõe somente os prompts das skills locais permitidas pela Atena."""
-    skill_slugs = (
-        "auditoria-interna", "aws-athena", "ciencia-dados", "analise-documentos", "documentacao-auditoria",
-    )
-    skills_root = Path(settings.BASE_DIR) / ".agents" / "skills"
-    skills = []
-    for slug in skill_slugs:
-        try:
-            content = (skills_root / slug / "SKILL.md").read_text(encoding="utf-8")
-        except OSError:
-            content = "Prompt indisponível neste ambiente."
-        skills.append({"slug": slug, "content": content})
-    return JsonResponse({"skills": skills})
+_SKILL_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+
+
+def _skills_root() -> Path:
+    return Path(settings.BASE_DIR) / ".agents" / "skills"
+
+
+def _skill_metadata(slug: str, content: str) -> tuple[str, str]:
+    """Lê name/description do frontmatter sem depender de biblioteca YAML."""
+    name, description = slug.replace("-", " ").title(), ""
+    match = _SKILL_FRONTMATTER_RE.match(content)
+    if not match:
+        return name, description
+    for line in match.group(1).splitlines():
+        key, _, value = line.partition(":")
+        value = value.strip().strip('"').strip("'")
+        if key.strip() == "name" and value:
+            name = value
+        elif key.strip() == "description":
+            description = value
+    return name, description
+
+
+def _skill_payload(prompt_path: Path) -> dict:
+    slug = prompt_path.parent.name
+    content = prompt_path.read_text(encoding="utf-8")
+    name, description = _skill_metadata(slug, content)
+    return {"slug": slug, "name": name, "description": description, "prompt": content, "content": content}
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def codex_skills(request):
+    """Catálogo e criação de skills reais do repositório (.agents/skills)."""
+    root = _skills_root()
+    if request.method == "GET":
+        items = []
+        if root.is_dir():
+            for prompt_path in sorted(root.glob("*/SKILL.md")):
+                try:
+                    items.append(_skill_payload(prompt_path))
+                except OSError:
+                    continue
+        return JsonResponse({"skills": items})
+
+    try:
+        data = json.loads(request.body or "{}")
+        raw_slug = (data.get("slug") or data.get("name") or "").strip().lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", raw_slug).encode("ascii", "ignore").decode()).strip("-")
+        if not _SKILL_SLUG_RE.fullmatch(slug):
+            return JsonResponse({"status": "error", "message": "Use um nome com letras, números e hífens (até 63 caracteres)."}, status=400)
+        content = (data.get("prompt") or data.get("content") or "").strip()
+        if not content:
+            return JsonResponse({"status": "error", "message": "O prompt da skill é obrigatório."}, status=400)
+        if len(content) > 100_000:
+            return JsonResponse({"status": "error", "message": "O prompt excede o limite de 100 mil caracteres."}, status=400)
+        if not _SKILL_FRONTMATTER_RE.match(content):
+            name = (data.get("name") or slug).strip()[:120]
+            description = (data.get("description") or "").strip()[:500]
+            content = f'---\nname: {slug}\ndescription: {json.dumps(description, ensure_ascii=False)}\n---\n\n# {name}\n\n{content}\n'
+        prompt_path = root / slug / "SKILL.md"
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text(content + ("" if content.endswith("\n") else "\n"), encoding="utf-8")
+        return JsonResponse({"status": "success", "skill": _skill_payload(prompt_path)})
+    except (TypeError, ValueError, OSError) as exc:
+        return JsonResponse({"status": "error", "message": str(exc)}, status=400)
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def codex_skill_delete(_request, slug: str):
+    if not _SKILL_SLUG_RE.fullmatch(slug):
+        return JsonResponse({"status": "error", "message": "Skill inválida."}, status=400)
+    skill_dir = _skills_root() / slug
+    prompt_path = skill_dir / "SKILL.md"
+    if not prompt_path.is_file():
+        return JsonResponse({"status": "error", "message": "Skill não encontrada."}, status=404)
+    try:
+        shutil.rmtree(skill_dir)
+        return JsonResponse({"status": "success"})
+    except OSError as exc:
+        return JsonResponse({"status": "error", "message": str(exc)}, status=400)
 
 
 @csrf_exempt
