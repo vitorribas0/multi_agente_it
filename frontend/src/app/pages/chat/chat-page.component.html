@@ -74,13 +74,39 @@
       <select *ngIf="engine === 'legacy'" id="agent-picker" class="agent-picker" [(ngModel)]="selectedAgentSlug">
         <option *ngFor="let a of agents" [value]="a.slug">{{ a.icon }} {{ a.name }}</option>
       </select>
-      <div class="model-badge" id="agent-badge" [title]="engine === 'codex' ? 'Atena · escrita isolada na pasta do chat · 5 habilidades locais' : 'Motor multiagente original'">
-        <span class="dot" [class.codex-dot]="engine === 'codex'"></span>
-        <span *ngIf="engine === 'codex'">◈ Atena · 5 habilidades</span>
-        <ng-container *ngIf="engine === 'legacy'">
-          <span *ngIf="selectedAgent as a">{{ a.icon }} {{ a.name }}</span>
-          <span *ngIf="!selectedAgent">Multiagente</span>
-        </ng-container>
+      <div class="skills-wrap" *ngIf="engine === 'codex'">
+        <button class="model-badge skills-badge" id="agent-badge" type="button"
+                [attr.aria-expanded]="skillsMenuOpen" aria-haspopup="dialog"
+                title="Ver as skills carregadas da Atena" (click)="toggleSkillsMenu()">
+          <span class="dot codex-dot"></span>
+          <span>◈ Atena · {{ atenaSkills.length }} skills</span>
+          <span class="skills-caret" [class.open]="skillsMenuOpen">⌄</span>
+        </button>
+
+        <section class="skills-menu" *ngIf="skillsMenuOpen" role="dialog" aria-label="Skills da Atena">
+          <div class="skills-menu-heading">
+            <div>
+              <strong>Skills da Atena</strong>
+              <small>Conhecimentos e rotinas disponíveis nesta conversa</small>
+            </div>
+            <button type="button" class="skills-menu-close" aria-label="Fechar skills" (click)="skillsMenuOpen = false">×</button>
+          </div>
+          <div class="skills-menu-list">
+            <article class="skill-row" *ngFor="let skill of atenaSkills">
+              <span class="skill-icon">{{ skill.icon }}</span>
+              <div>
+                <strong>{{ skill.name }}</strong>
+                <small>{{ skill.description }}</small>
+              </div>
+            </article>
+          </div>
+        </section>
+      </div>
+
+      <div class="model-badge" id="agent-badge" *ngIf="engine === 'legacy'" title="Motor multiagente original">
+        <span class="dot"></span>
+        <span *ngIf="selectedAgent as a">{{ a.icon }} {{ a.name }}</span>
+        <span *ngIf="!selectedAgent">Multiagente</span>
       </div>
     </div>
   </header>

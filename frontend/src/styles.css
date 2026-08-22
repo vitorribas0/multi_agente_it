@@ -509,6 +509,87 @@ body.html-preview-open:not(.html-preview-full) .main {
   box-shadow: 0 0 8px var(--accent-glow);
 }
 
+.skills-wrap { position: relative; }
+
+.skills-badge {
+  appearance: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.skills-badge:hover,
+.skills-badge[aria-expanded="true"] {
+  color: var(--text-primary);
+  border-color: rgba(236, 112, 0, .55);
+  background: rgba(236, 112, 0, .09);
+}
+
+.skills-caret {
+  margin-left: 1px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  transition: transform .16s ease;
+}
+.skills-caret.open { transform: rotate(180deg); }
+
+.skills-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(370px, calc(100vw - 32px));
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: rgba(25,25,33,.98);
+  box-shadow: 0 18px 60px rgba(0,0,0,.48);
+  overflow: hidden;
+  z-index: 80;
+  animation: fadeSlideIn .16s ease;
+}
+
+.skills-menu-heading {
+  padding: 14px 14px 12px 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.skills-menu-heading strong { display: block; color: var(--text-primary); font-size: 13px; line-height: 1.4; }
+.skills-menu-heading small { display: block; margin-top: 2px; color: var(--text-muted); font-size: 11px; }
+.skills-menu-close {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.skills-menu-close:hover { background: rgba(255,255,255,.07); color: var(--text-primary); }
+.skills-menu-list { padding: 7px 8px 9px; }
+.skill-row {
+  display: flex;
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: 10px;
+}
+.skill-row:hover { background: rgba(255,255,255,.045); }
+.skill-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  background: rgba(236, 112, 0, .12);
+  font-size: 14px;
+}
+.skill-row strong { display: block; color: var(--text-primary); font-size: 12px; line-height: 1.35; }
+.skill-row small { display: block; margin-top: 2px; color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+
 /* Messages */
 .messages-area {
   flex: 1;

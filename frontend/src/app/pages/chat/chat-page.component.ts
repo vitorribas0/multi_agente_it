@@ -135,6 +135,15 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   attachMenuOpen = false;
   // Bandeja de arquivos da conversa, no canto superior direito.
   filesMenuOpen = false;
+  // Skills disponíveis no ambiente isolado da Atena.
+  skillsMenuOpen = false;
+  readonly atenaSkills = [
+    { icon: '🛡️', name: 'Auditoria interna', description: 'Planejamento, testes, riscos, achados e recomendações.' },
+    { icon: '☁️', name: 'AWS Athena', description: 'Consultas seguras, catálogo Glue e rastreabilidade de dados.' },
+    { icon: '📈', name: 'Ciência de dados', description: 'Análise tabular, visualizações, segmentação e anomalias.' },
+    { icon: '📄', name: 'Análise de documentos', description: 'Leitura de PDFs, DOCX e imagens com evidências.' },
+    { icon: '✦', name: 'Documentação de auditoria', description: 'Relatórios, HTML, PDF e indicadores com identidade Itaú.' },
+  ];
   // Placeholder de upload em andamento (texto do que está carregando).
   uploading: string | null = null;
 
@@ -226,6 +235,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.typing = false;
     this.uploading = null;
     this.filesMenuOpen = false;
+    this.skillsMenuOpen = false;
     this.activePlaybook = null;
     this.playbookSuggestions = [];
     this.pendingPlaybookId = undefined;
@@ -586,6 +596,14 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.filesMenuOpen) this.attachMenuOpen = false;
   }
 
+  toggleSkillsMenu(): void {
+    this.skillsMenuOpen = !this.skillsMenuOpen;
+    if (this.skillsMenuOpen) {
+      this.attachMenuOpen = false;
+      this.filesMenuOpen = false;
+    }
+  }
+
   fileIcon(kind: 'table' | 'document'): string {
     return kind === 'table' ? '📊' : '📄';
   }
@@ -629,6 +647,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     // Fecha os menus ao clicar fora deles.
     if (this.attachMenuOpen && !target.closest('.attach-wrap')) this.attachMenuOpen = false;
     if (this.filesMenuOpen && !target.closest('.files-wrap')) this.filesMenuOpen = false;
+    if (this.skillsMenuOpen && !target.closest('.skills-wrap')) this.skillsMenuOpen = false;
   }
 
   pickSingle(): void {
