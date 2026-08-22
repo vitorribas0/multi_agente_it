@@ -55,6 +55,11 @@ urlpatterns = [
 
     # Download de arquivos exportados pela tool exportar_dataset
     path("api/exports/<str:filename>", views.export_download, name="export_download"),
+    path(
+        "api/conversations/<int:conv_id>/artifacts/<str:filename>",
+        views.conversation_artifact_download,
+        name="conversation_artifact_download",
+    ),
 
     # Playbooks (pipelines multi-agente autorados no canvas)
     path("api/playbooks/", views.playbook_list, name="playbook_list"),

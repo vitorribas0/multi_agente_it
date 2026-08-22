@@ -27,6 +27,7 @@ from tools.gerar_html import gerar_html
 
 _HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _HTML_EXPORT_PREFIX = "/api/exports/"
+_CONVERSATION_ARTIFACT_PREFIX = "/api/conversations/"
 _ARTIFACTS_DIRNAME = "artefatos"
 _GENERATED_ARTIFACT_EXTENSIONS = {".csv", ".xlsx", ".pdf", ".html", ".htm"}
 _MAX_GENERATED_ARTIFACT_BYTES = 200 * 1024 * 1024
@@ -482,8 +483,18 @@ def _pdf_pages(path: Path) -> int | None:
         return None
 
 
+def _conversation_artifacts_dir(conversation_id: int) -> Path:
+    target = Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conversation_id) / _ARTIFACTS_DIRNAME
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _conversation_artifact_url(conversation_id: int, filename: str) -> str:
+    return f"/api/conversations/{conversation_id}/artifacts/{filename}"
+
+
 def _generated_artifact_attachment(path: Path, conversation_id: int) -> dict | None:
-    """Copia um artefato da caixa do chat para exports/ e cria seu card."""
+    """Versiona um artefato dentro da caixa do chat e cria seu card."""
     try:
         size = path.stat().st_size
     except OSError:
@@ -497,12 +508,10 @@ def _generated_artifact_attachment(path: Path, conversation_id: int) -> dict | N
     formato = "html" if source_suffix == ".htm" else source_suffix.lstrip(".")
     safe_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", path.stem).strip("_")[:50]
     safe_stem = safe_stem or "artefato"
-    export_filename = f"codex_c{conversation_id}_{safe_stem}_{uuid4().hex[:8]}.{formato}"
-    export_dir = Path(settings.BASE_DIR) / "exports"
-    export_dir.mkdir(parents=True, exist_ok=True)
-    export_path = export_dir / export_filename
+    version_filename = f"{safe_stem}_{uuid4().hex[:8]}.{formato}"
+    version_path = _conversation_artifacts_dir(conversation_id) / version_filename
     try:
-        shutil.copy2(path, export_path)
+        shutil.copy2(path, version_path)
     except OSError:
         return None
 
@@ -510,7 +519,7 @@ def _generated_artifact_attachment(path: Path, conversation_id: int) -> dict | N
         "kind": "export",
         "ok": True,
         "filename": path.name,
-        "download_url": f"{_HTML_EXPORT_PREFIX}{export_filename}",
+        "download_url": _conversation_artifact_url(conversation_id, version_filename),
         "formato": formato,
         "titulo": path.stem,
         "size_kb": round(size / 1024, 1),
@@ -597,7 +606,7 @@ def _split_html_response(answer: str) -> tuple[str, str | None]:
     return visible_text, html
 
 
-def _materialize_html_response(answer: str) -> tuple[str, list[dict]]:
+def _materialize_html_response(answer: str, conversation_id: int) -> tuple[str, list[dict]]:
     """Converte HTML inline do Codex no attachment já entendido pelo Angular."""
     visible_text, html = _split_html_response(answer)
     if html is None:
@@ -605,7 +614,7 @@ def _materialize_html_response(answer: str) -> tuple[str, list[dict]]:
 
     title_match = _HTML_TITLE_RE.search(html)
     title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else "Relatório"
-    session: dict = {}
+    session: dict = {"__conversation_id": conversation_id}
     raw_result = gerar_html(
         _session=session,
         html=html,
@@ -644,16 +653,23 @@ def _is_html_revision_request(text: str) -> bool:
 def _latest_html_artifact(conv) -> str | None:
     """Lê com segurança o HTML do attachment mais recente da conversa."""
     export_dir = (Path(settings.BASE_DIR) / "exports").resolve()
+    artifacts_dir = _conversation_artifacts_dir(conv.id).resolve()
     for message in conv.messages.order_by("-created_at"):
         for attachment in reversed(message.attachments or []):
             if attachment.get("kind") != "export" or attachment.get("formato") != "html":
                 continue
             download_url = str(attachment.get("download_url") or "")
-            if not download_url.startswith(_HTML_EXPORT_PREFIX):
-                continue
-            filename = Path(download_url.removeprefix(_HTML_EXPORT_PREFIX)).name
-            candidate = (export_dir / filename).resolve()
-            if candidate.parent != export_dir or candidate.suffix.lower() not in {".html", ".htm"}:
+            candidate: Path | None = None
+            local_prefix = f"{_CONVERSATION_ARTIFACT_PREFIX}{conv.id}/artifacts/"
+            if download_url.startswith(local_prefix):
+                candidate = (artifacts_dir / Path(download_url.removeprefix(local_prefix)).name).resolve()
+                if candidate.parent != artifacts_dir:
+                    continue
+            elif download_url.startswith(_HTML_EXPORT_PREFIX):
+                candidate = (export_dir / Path(download_url.removeprefix(_HTML_EXPORT_PREFIX)).name).resolve()
+                if candidate.parent != export_dir:
+                    continue
+            if candidate is None or candidate.suffix.lower() not in {".html", ".htm"}:
                 continue
             try:
                 return candidate.read_text(encoding="utf-8")
@@ -1006,7 +1022,7 @@ def codex_chat_stream(request):
             _prepare_session_workspace(conv)
             if generated_attachments:
                 answer = _strip_codex_file_citations(answer)
-            answer, html_attachments = _materialize_html_response(answer)
+            answer, html_attachments = _materialize_html_response(answer, conv.id)
             attachments = generated_attachments + html_attachments
             assistant = Message.objects.create(
                 conversation=conv,

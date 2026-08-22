@@ -2185,7 +2185,7 @@ def conversation_dataset(request, conv_id):
 
 # ── Download de exports ──────────────────────────────────────────────
 
-_EXPORT_FILENAME_RE = re.compile(r"^[A-Za-z0-9_-]+\.(csv|xlsx|pdf|html)$")
+_EXPORT_FILENAME_RE = re.compile(r"^[A-Za-z0-9_-]+\.(csv|xlsx|pdf|html|htm)$")
 
 
 _EXPORT_CONTENT_TYPES = {
@@ -2193,6 +2193,7 @@ _EXPORT_CONTENT_TYPES = {
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "pdf": "application/pdf",
     "html": "text/html; charset=utf-8",
+    "htm": "text/html; charset=utf-8",
 }
 
 
@@ -2217,5 +2218,29 @@ def export_download(request, filename: str):
         content_type=content_type,
     )
     # Garante que o browser baixe (sem essa header alguns clients abrem inline).
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+@require_GET
+def conversation_artifact_download(request, conv_id: int, filename: str):
+    """Serve um artefato que pertence exclusivamente a uma conversa."""
+    if not _EXPORT_FILENAME_RE.match(filename):
+        raise Http404("Nome de arquivo inválido")
+
+    artifacts_dir = (
+        Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conv_id) / "artefatos"
+    ).resolve()
+    path = (artifacts_dir / filename).resolve()
+    if path.parent != artifacts_dir or not path.is_file():
+        raise Http404("Arquivo não encontrado")
+
+    ext = path.suffix.lstrip(".").lower()
+    response = FileResponse(
+        path.open("rb"),
+        as_attachment=True,
+        filename=filename,
+        content_type=_EXPORT_CONTENT_TYPES.get(ext, "application/octet-stream"),
+    )
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response

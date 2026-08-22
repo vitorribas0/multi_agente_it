@@ -13,12 +13,14 @@ from .codex_views import (
     _codex_trace_record,
     _collect_generated_artifacts,
     _is_html_revision_request,
+    _latest_html_artifact,
     _prepare_session_workspace,
     _prompt_with_history,
     _split_html_response,
     _strip_codex_file_citations,
 )
 from .models import Conversation, Message
+from tools.gerar_html import gerar_html
 
 
 class CodexAppServerEventTests(SimpleTestCase):
@@ -264,14 +266,31 @@ class CodexHtmlArtifactTests(SimpleTestCase):
         self.assertFalse(_is_html_revision_request("Crie um relatório HTML mensal."))
 
 
+class SessionArtifactStorageTests(SimpleTestCase):
+    def test_html_tool_saves_into_the_conversation_box(self):
+        with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
+            result = json.loads(gerar_html(
+                _session={"__conversation_id": 23},
+                html="<!doctype html><html><head><title>Teste</title></head><body>ok</body></html>",
+                titulo="Teste",
+            ))
+
+            self.assertTrue(result["download_url"].startswith("/api/conversations/23/artifacts/"))
+            artifact = (
+                Path(temp_dir) / "runtime" / "codex_sessions" / "23" / "artefatos" / result["filename"]
+            )
+            self.assertTrue(artifact.exists())
+            self.assertFalse((Path(temp_dir) / "exports" / result["filename"]).exists())
+
+
 class CodexHtmlRevisionPromptTests(TestCase):
     def test_injects_latest_html_and_requires_complete_document(self):
         with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
-            export_dir = Path(temp_dir) / "exports"
-            export_dir.mkdir()
-            html = "<!doctype html><html><body>Relatório anterior</body></html>"
-            (export_dir / "relatorio.html").write_text(html, encoding="utf-8")
             conv = Conversation.objects.create(title="Teste")
+            artifacts_dir = Path(temp_dir) / "runtime" / "codex_sessions" / str(conv.id) / "artefatos"
+            artifacts_dir.mkdir(parents=True)
+            html = "<!doctype html><html><body>Relatório anterior</body></html>"
+            (artifacts_dir / "relatorio.html").write_text(html, encoding="utf-8")
             Message.objects.create(
                 conversation=conv,
                 role="assistant",
@@ -279,7 +298,7 @@ class CodexHtmlRevisionPromptTests(TestCase):
                 attachments=[{
                     "kind": "export",
                     "formato": "html",
-                    "download_url": "/api/exports/relatorio.html",
+                    "download_url": f"/api/conversations/{conv.id}/artifacts/relatorio.html",
                 }],
             )
 
@@ -293,6 +312,26 @@ class CodexHtmlRevisionPromptTests(TestCase):
         self.assertIn("documento HTML completo", prompt)
         self.assertIn("Não devolva CSS isolado", prompt)
         self.assertTrue(prompt.endswith("para inserir ou substituir trechos."))
+
+    def test_keeps_reading_legacy_exports_for_existing_history(self):
+        with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
+            export_dir = Path(temp_dir) / "exports"
+            export_dir.mkdir()
+            html = "<!doctype html><html><body>Versão antiga</body></html>"
+            (export_dir / "relatorio.html").write_text(html, encoding="utf-8")
+            conv = Conversation.objects.create(title="Teste")
+            Message.objects.create(
+                conversation=conv,
+                role="assistant",
+                content="Relatório gerado.",
+                attachments=[{
+                    "kind": "export",
+                    "formato": "html",
+                    "download_url": "/api/exports/relatorio.html",
+                }],
+            )
+
+            self.assertEqual(_latest_html_artifact(conv), html)
 
 
 class CodexGeneratedArtifactTests(TestCase):
@@ -330,8 +369,26 @@ class CodexGeneratedArtifactTests(TestCase):
             self.assertEqual(attachment["linhas"], 2)
             self.assertEqual(attachment["colunas"], 2)
             self.assertEqual(attachment["abas"], ["Resumo"])
-            exported = Path(temp_dir) / "exports" / Path(attachment["download_url"]).name
+            self.assertEqual(
+                attachment["download_url"].split("/artifacts/")[0],
+                "/api/conversations/7",
+            )
+            exported = artifacts_dir / Path(attachment["download_url"]).name
             self.assertTrue(exported.exists())
+
+    def test_serves_artifact_only_from_its_conversation(self):
+        with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
+            artifacts_dir = Path(temp_dir) / "runtime" / "codex_sessions" / "12" / "artefatos"
+            artifacts_dir.mkdir(parents=True)
+            (artifacts_dir / "relatorio.html").write_text("<html>ok</html>", encoding="utf-8")
+
+            response = self.client.get("/api/conversations/12/artifacts/relatorio.html")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(b"".join(response.streaming_content), b"<html>ok</html>")
+            self.assertEqual(
+                self.client.get("/api/conversations/13/artifacts/relatorio.html").status_code,
+                404,
+            )
 
     def test_does_not_republish_unchanged_artifact(self):
         with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):

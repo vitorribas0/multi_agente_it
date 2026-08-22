@@ -8,31 +8,17 @@ de uma apresentação/relatório/documentação. Esta tool valida, salva em
 para CSV/XLSX/PDF.
 """
 import json
-import os
 import re
-import time
-from pathlib import Path
 from uuid import uuid4
 
 from .registry import tool, publish_attachment
+from .session_artifacts import artifact_dir, artifact_download_url
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
 def _err(msg: str) -> str:
     return json.dumps({"erro": msg}, ensure_ascii=False)
-
-
-def _exports_dir() -> Path:
-    """Resolve exports/ a partir do settings.BASE_DIR ou cwd como fallback."""
-    try:
-        from django.conf import settings
-        base = Path(settings.BASE_DIR)
-    except Exception:
-        base = Path(os.getcwd())
-    d = base / "exports"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 def _safe_filename(stem: str) -> str:
@@ -248,7 +234,7 @@ def gerar_html(
 
     stem = _safe_filename(nome_arquivo) if nome_arquivo else _safe_filename(titulo)
     filename = f"{stem}_{uuid4().hex[:8]}.html"
-    path = _exports_dir() / filename
+    path = artifact_dir(_session) / filename
 
     try:
         path.write_text(content, encoding="utf-8")
@@ -259,7 +245,7 @@ def gerar_html(
     payload = {
         "ok": True,
         "filename": filename,
-        "download_url": f"/api/exports/{filename}",
+        "download_url": artifact_download_url(_session, filename),
         "formato": "html",
         "titulo": titulo,
         "size_kb": size_kb,

@@ -16,9 +16,11 @@ apenas metadados, pois seu conteúdo não é útil como texto no contexto.
 """
 import json
 import os
+import re
 from pathlib import Path
 
 from .registry import tool
+from .session_artifacts import artifact_dir, conversation_id
 
 
 # Extensões cujo conteúdo faz sentido devolver como texto ao modelo.
@@ -43,14 +45,27 @@ def _exports_dir() -> Path:
     return d
 
 
-def _resolve_inside_exports(nome: str) -> Path | None:
-    """Resolve `nome` para um arquivo DENTRO de exports/ ou retorna None.
+def _resolve_artifact(nome: str, session: dict | None) -> Path | None:
+    """Resolve uma referência para o artefato da conversa ou legado.
 
     Aceita tanto o download_url ("/api/exports/arquivo.html") quanto o
     filename puro. Bloqueia qualquer path que escape do diretório exports/.
     """
-    # Normaliza: aceita a URL completa, tira o prefixo da rota e barras iniciais.
     nome = (nome or "").strip()
+    local_match = re.fullmatch(r"/?api/conversations/(\d+)/artifacts/([A-Za-z0-9_-]+\.[A-Za-z0-9]+)", nome)
+    if local_match:
+        requested_conv, filename = int(local_match.group(1)), local_match.group(2)
+        if conversation_id(session) != requested_conv:
+            return None
+        root = artifact_dir(session).resolve()
+        candidate = (root / filename).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return None
+        return candidate if candidate.is_file() else None
+
+    # Referências antigas permanecem compatíveis com exports/.
     for prefix in ("/api/exports/", "api/exports/", "/exports/", "exports/"):
         if nome.startswith(prefix):
             nome = nome[len(prefix):]
@@ -84,16 +99,16 @@ def _resolve_inside_exports(nome: str) -> Path | None:
     ),
     icon="📂",
 )
-def ler_artefato(referencia: str) -> str:
+def ler_artefato(referencia: str, _session: dict) -> str:
     """Lê o conteúdo de um artefato salvo em exports/.
 
     Args:
         referencia: O download_url (ex.: "/api/exports/arquivo.html") ou o nome do arquivo do artefato a reabrir.
     """
-    path = _resolve_inside_exports(referencia)
+    path = _resolve_artifact(referencia, _session)
     if path is None:
         return _err(
-            f"Artefato não encontrado ou fora de exports/: {referencia!r}. "
+            f"Artefato não encontrado ou fora da conversa atual: {referencia!r}. "
             "Confira o download_url exatamente como foi gerado."
         )
 
