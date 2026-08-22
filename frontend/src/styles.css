@@ -1801,6 +1801,41 @@ body.html-preview-open:not(.html-preview-full) .main {
   overflow-y: auto;
 }
 
+.conversation-file-section + .conversation-file-section {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.conversation-file-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 8px 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.conversation-file-section-heading small {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0;
+  text-align: center;
+}
+
+.conversation-files-empty-section {
+  padding: 6px 10px 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .conversation-file {
   display: flex;
   align-items: center;
@@ -1810,6 +1845,11 @@ body.html-preview-open:not(.html-preview-full) .main {
   transition: background .15s;
 }
 .conversation-file:hover { background: rgba(255,255,255,.045); }
+.output-file {
+  color: inherit;
+  text-decoration: none;
+}
+.output-file:hover .conversation-file-copy strong { color: var(--accent-2); }
 
 .conversation-file-icon {
   width: 36px;
@@ -1853,6 +1893,20 @@ body.html-preview-open:not(.html-preview-full) .main {
   font-size: 11px;
   font-weight: 700;
 }
+
+.conversation-file-download {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: var(--accent-2);
+  font-size: 16px;
+  font-weight: 700;
+}
+.output-file:hover .conversation-file-download { background: var(--accent-dim); }
 
 .conversation-files-empty {
   padding: 28px 20px 30px;

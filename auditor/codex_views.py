@@ -705,10 +705,13 @@ def _revision_output_requirement() -> str:
 
 
 def _prepare_session_workspace(conv) -> Path:
-    """Materializa entradas e mantém a caixa isolada de artefatos do chat."""
+    """Materializa uma caixa de chat legível: entrada separada das saídas."""
     workspace = Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conv.id)
-    datasets_dir = workspace / "datasets_nomeados"
+    input_dir = workspace / "entrada"
+    datasets_dir = input_dir / "datasets"
+    documents_dir = input_dir / "documentos"
     datasets_dir.mkdir(parents=True, exist_ok=True)
+    documents_dir.mkdir(parents=True, exist_ok=True)
     (workspace / _ARTIFACTS_DIRNAME).mkdir(parents=True, exist_ok=True)
 
     state = conv.state or {}
@@ -719,13 +722,14 @@ def _prepare_session_workspace(conv) -> Path:
         "workbooks": state.get("excel_workbooks") or {},
         "dataset_atual": None,
         "datasets_nomeados": {},
+        "documento_atual": None,
         "artefatos_gerados": _generated_artifacts_manifest(workspace),
     }
     current = state.get("athena_last_result")
     if current is not None:
-        current_path = workspace / "dataset_atual.json"
+        current_path = input_dir / "dataset_atual.json"
         current_path.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
-        manifest["dataset_atual"] = current_path.name
+        manifest["dataset_atual"] = str(current_path.relative_to(workspace))
 
     for index, (name, rows) in enumerate((state.get("named_datasets") or {}).items(), start=1):
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name)).strip("._")[:80]
@@ -733,6 +737,19 @@ def _prepare_session_workspace(conv) -> Path:
         path = datasets_dir / filename
         path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
         manifest["datasets_nomeados"][str(name)] = str(path.relative_to(workspace))
+
+    document = state.get("documento_atual") or {}
+    document_markdown = document.get("markdown")
+    if document_markdown:
+        original_name = str(document.get("filename") or "documento")
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(original_name).stem).strip("._")[:80]
+        document_path = documents_dir / f"{safe_name or 'documento'}.md"
+        document_path.write_text(str(document_markdown), encoding="utf-8")
+        manifest["documento_atual"] = {
+            "arquivo": str(document_path.relative_to(workspace)),
+            "original": original_name,
+            "paginas": document.get("page_count"),
+        }
 
     (workspace / "manifesto_sessao.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"

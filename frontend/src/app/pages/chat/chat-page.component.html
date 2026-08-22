@@ -4,7 +4,7 @@
     <div class="header-controls">
       <div class="files-wrap">
         <button class="conversation-files-btn" type="button"
-                [class.has-files]="conversationFiles.length"
+                [class.has-files]="sessionFileCount"
                 (click)="toggleFilesMenu()"
                 [attr.aria-expanded]="filesMenuOpen"
                 title="Arquivos anexados nesta conversa">
@@ -12,27 +12,49 @@
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
           </svg>
           <span class="conversation-files-label">Arquivos</span>
-          <span class="conversation-files-count">{{ conversationFiles.length }}</span>
+          <span class="conversation-files-count">{{ sessionFileCount }}</span>
         </button>
 
         <div class="conversation-files-menu" *ngIf="filesMenuOpen">
           <div class="conversation-files-heading">
             <div>
               <strong>Arquivos da conversa</strong>
-              <small>Contexto disponível para os agentes</small>
+              <small>Entrada e saídas guardadas nesta conversa</small>
             </div>
             <button type="button" class="conversation-files-close" (click)="filesMenuOpen = false" title="Fechar">×</button>
           </div>
 
-          <div class="conversation-files-list" *ngIf="conversationFiles.length; else noConversationFiles">
-            <div class="conversation-file" *ngFor="let file of conversationFiles">
-              <span class="conversation-file-icon">{{ fileIcon(file.kind) }}</span>
-              <span class="conversation-file-copy">
-                <strong [title]="file.filename">{{ file.filename }}</strong>
-                <small>{{ file.meta }}</small>
-              </span>
-              <span class="conversation-file-status" title="Disponível na sessão">✓</span>
-            </div>
+          <div class="conversation-files-list" *ngIf="sessionFileCount; else noConversationFiles">
+            <section class="conversation-file-section">
+              <div class="conversation-file-section-heading">
+                <span>Entrada</span><small>{{ inputFiles.length }}</small>
+              </div>
+              <div class="conversation-files-empty-section" *ngIf="!inputFiles.length">Nenhum arquivo de entrada.</div>
+              <div class="conversation-file" *ngFor="let file of inputFiles">
+                <span class="conversation-file-icon">{{ fileIcon(file.kind) }}</span>
+                <span class="conversation-file-copy">
+                  <strong [title]="file.filename">{{ file.filename }}</strong>
+                  <small>{{ file.meta }}</small>
+                </span>
+                <span class="conversation-file-status" title="Disponível como contexto">✓</span>
+              </div>
+            </section>
+
+            <section class="conversation-file-section outputs">
+              <div class="conversation-file-section-heading">
+                <span>Saídas</span><small>{{ outputFiles.length }}</small>
+              </div>
+              <div class="conversation-files-empty-section" *ngIf="!outputFiles.length">Nenhum arquivo gerado ainda.</div>
+              <a class="conversation-file output-file" *ngFor="let file of outputFiles"
+                 [href]="file.downloadUrl" [attr.download]="file.filename" title="Baixar arquivo">
+                <span class="conversation-file-icon">{{ outputIcon(file.format) }}</span>
+                <span class="conversation-file-copy">
+                  <strong [title]="file.filename">{{ file.filename }}</strong>
+                  <small>{{ file.meta }}</small>
+                </span>
+                <span class="conversation-file-download" title="Baixar">↓</span>
+              </a>
+            </section>
           </div>
 
           <ng-template #noConversationFiles>

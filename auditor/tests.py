@@ -418,3 +418,30 @@ class CodexGeneratedArtifactTests(TestCase):
                 manifest["artefatos_gerados"][0]["arquivo"],
                 "artefatos/resultado.csv",
             )
+
+    def test_workspace_separates_input_data_from_outputs(self):
+        with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
+            conv = Conversation.objects.create(
+                title="Entradas",
+                state={
+                    "athena_last_result": [{"id": 1, "valor": 20}],
+                    "athena_last_columns": ["id", "valor"],
+                    "named_datasets": {"base de teste": [{"id": 1}]},
+                    "documento_atual": {
+                        "filename": "evidencia.pdf",
+                        "markdown": "# Evidência",
+                        "page_count": 1,
+                    },
+                },
+            )
+
+            workspace = _prepare_session_workspace(conv)
+            manifest = json.loads(
+                (workspace / "manifesto_sessao.json").read_text(encoding="utf-8")
+            )
+
+            self.assertTrue((workspace / "entrada" / "dataset_atual.json").exists())
+            self.assertTrue((workspace / "entrada" / "datasets" / "001_base_de_teste.json").exists())
+            self.assertTrue((workspace / "entrada" / "documentos" / "evidencia.md").exists())
+            self.assertEqual(manifest["dataset_atual"], "entrada/dataset_atual.json")
+            self.assertEqual(manifest["documento_atual"]["arquivo"], "entrada/documentos/evidencia.md")

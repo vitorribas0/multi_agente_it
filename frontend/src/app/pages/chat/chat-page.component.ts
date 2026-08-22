@@ -515,10 +515,9 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     return out;
   }
 
-  // Arquivos enviados pelo usuário nesta conversa. Artefatos produzidos pelo
-  // agente (HTML, gráficos, exports) continuam aparecendo na mensagem que os
-  // gerou; esta bandeja mostra apenas o contexto anexado pelo usuário.
-  get conversationFiles(): Array<{
+  // Entrada da conversa: arquivos enviados pelo usuário e já materializados
+  // na pasta `entrada/` da sessão pelo backend.
+  get inputFiles(): Array<{
     filename: string;
     kind: 'table' | 'document';
     meta: string;
@@ -547,6 +546,41 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     return Array.from(files.values()).reverse();
   }
 
+  // Saídas persistidas na pasta `artefatos/` desta conversa. A URL é própria
+  // do chat, então o menu não mistura arquivos de conversas diferentes.
+  get outputFiles(): Array<{
+    filename: string;
+    format: string;
+    meta: string;
+    downloadUrl: string;
+  }> {
+    const files = new Map<string, {
+      filename: string;
+      format: string;
+      meta: string;
+      downloadUrl: string;
+    }>();
+    for (const message of this.messages) {
+      if (message.role !== 'assistant') continue;
+      for (const attachment of this.attachmentsOf(message)) {
+        if (attachment.kind !== 'export') continue;
+        const filename = String(attachment['filename'] || '').trim();
+        const downloadUrl = String(attachment['download_url'] || '').trim();
+        if (!filename || !downloadUrl) continue;
+        const format = String(attachment['formato'] || '').toLowerCase();
+        const sizeKb = Number(attachment['size_kb'] || 0);
+        const detail = format ? format.toUpperCase() : 'Arquivo';
+        const size = sizeKb > 0 ? ` · ${sizeKb >= 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`}` : '';
+        files.set(downloadUrl, { filename, format, meta: `${detail}${size}`, downloadUrl });
+      }
+    }
+    return Array.from(files.values()).reverse();
+  }
+
+  get sessionFileCount(): number {
+    return this.inputFiles.length + this.outputFiles.length;
+  }
+
   toggleFilesMenu(): void {
     this.filesMenuOpen = !this.filesMenuOpen;
     if (this.filesMenuOpen) this.attachMenuOpen = false;
@@ -554,6 +588,14 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   fileIcon(kind: 'table' | 'document'): string {
     return kind === 'table' ? '📊' : '📄';
+  }
+
+  outputIcon(format: string): string {
+    if (format === 'html' || format === 'htm') return '🌐';
+    if (format === 'pdf') return '📕';
+    if (format === 'xlsx') return '📊';
+    if (format === 'csv') return '🧾';
+    return '📦';
   }
 
   asTable(att: Attachment): TableAttachment {
