@@ -9,6 +9,7 @@ from .codex_views import (
     _PENDING_INTERACTIONS,
     _PENDING_INTERACTIONS_LOCK,
     _PendingCodexInteraction,
+    _advance_live_plan,
     _artifact_snapshot,
     _codex_trace_record,
     _collect_generated_artifacts,
@@ -115,6 +116,23 @@ class CodexAppServerEventTests(SimpleTestCase):
         self.assertEqual(sent[1]["result"]["answers"]["scope"]["answers"], ["2026"])
         self.assertEqual(events[0]["type"], "plan")
         self.assertEqual(events[0]["plan"][0]["status"], "inProgress")
+
+
+class LivePlanProgressTests(SimpleTestCase):
+    def test_advances_the_active_step_after_a_completed_action(self):
+        plan = [
+            {"step": "Ler dados", "status": "inProgress"},
+            {"step": "Analisar", "status": "pending"},
+            {"step": "Gerar relatório", "status": "pending"},
+        ]
+
+        advanced = _advance_live_plan(plan)
+
+        self.assertEqual([item["status"] for item in advanced], ["completed", "inProgress", "pending"])
+        self.assertEqual(plan[0]["status"], "inProgress")
+
+    def test_does_not_advance_a_completed_plan(self):
+        self.assertIsNone(_advance_live_plan([{"step": "Concluído", "status": "completed"}]))
 
 
 class CodexInteractionEndpointTests(TestCase):

@@ -46,6 +46,41 @@ _TRACE_META = {
 }
 
 
+def _normalize_live_plan(raw_plan: list[dict]) -> list[dict]:
+    """Reduz o plano para o contrato público exibido no frontend."""
+    return [
+        {
+            "step": _sanitize_trace_text(item.get("step"), 500),
+            "status": item.get("status") or "pending",
+        }
+        for item in raw_plan[:20]
+        if isinstance(item, dict)
+    ]
+
+
+def _advance_live_plan(plan: list[dict]) -> list[dict] | None:
+    """Avança o plano quando uma ação concreta termina.
+
+    O App Server pode não reenviar ``turn/plan/updated`` entre duas tools. Nesse
+    caso, usar a conclusão da ação como marco evita uma interface congelada.
+    Um novo plano explícito do App Server sempre substitui esta estimativa.
+    """
+    if not plan:
+        return None
+    next_plan = [dict(item) for item in plan]
+    active_index = next((i for i, item in enumerate(next_plan) if item.get("status") == "inProgress"), None)
+    if active_index is None:
+        active_index = next((i for i, item in enumerate(next_plan) if item.get("status") == "pending"), None)
+    if active_index is None:
+        return None
+
+    next_plan[active_index]["status"] = "completed"
+    following = next((i for i, item in enumerate(next_plan) if item.get("status") == "pending"), None)
+    if following is not None:
+        next_plan[following]["status"] = "inProgress"
+    return next_plan
+
+
 @dataclass
 class _PendingCodexInteraction:
     conversation_id: int
@@ -861,6 +896,8 @@ def codex_chat_stream(request):
         trace_started_at: dict[str, float] = {}
         trace_output: dict[str, str] = {}
         trace_completed: set[str] = set()
+        live_plan: list[dict] = []
+        live_plan_explanation = ""
         try:
             session_workspace = _prepare_session_workspace(conv)
             artifacts_dir = session_workspace / _ARTIFACTS_DIRNAME
@@ -876,7 +913,7 @@ def codex_chat_stream(request):
                 events.put({"type": "progress", "stage": "thinking", "icon": "🛡️", "text": "Sandbox isolado · escrita restrita aos artefatos deste chat"})
 
                 def collect_turn(turn_prompt: str) -> str:
-                    nonlocal approve_all_for_turn
+                    nonlocal approve_all_for_turn, live_plan, live_plan_explanation
 
                     def handle_server_request(method: str, params: dict) -> dict:
                         nonlocal approve_all_for_turn
@@ -912,19 +949,14 @@ def codex_chat_stream(request):
                         if event["type"] == "delta" and event.get("phase") != "commentary":
                             parts.append(event["text"])
                         elif event["type"] == "plan":
+                            live_plan = _normalize_live_plan(event.get("plan") or [])
+                            live_plan_explanation = _sanitize_trace_text(
+                                event.get("explanation"), 1200
+                            )
                             events.put({
                                 "type": "plan",
-                                "explanation": _sanitize_trace_text(
-                                    event.get("explanation"), 1200
-                                ),
-                                "plan": [
-                                    {
-                                        "step": _sanitize_trace_text(item.get("step"), 500),
-                                        "status": item.get("status") or "pending",
-                                    }
-                                    for item in (event.get("plan") or [])[:20]
-                                    if isinstance(item, dict)
-                                ],
+                                "explanation": live_plan_explanation,
+                                "plan": live_plan,
                             })
                         elif event["type"] == "activity":
                             item = event.get("item") or {}
@@ -984,6 +1016,14 @@ def codex_chat_stream(request):
                                             record["result"], _TRACE_RESULT_PREVIEW_LIMIT
                                         ),
                                     })
+                                    advanced_plan = _advance_live_plan(live_plan)
+                                    if advanced_plan is not None:
+                                        live_plan = advanced_plan
+                                        events.put({
+                                            "type": "plan",
+                                            "explanation": live_plan_explanation,
+                                            "plan": live_plan,
+                                        })
                         elif event["type"] == "activity_output":
                             item_id = str(event.get("item_id") or "")
                             if item_id:
