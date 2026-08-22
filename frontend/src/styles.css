@@ -615,8 +615,14 @@ body.html-preview-open:not(.html-preview-full) .main {
   background: rgba(0,0,0,.16);
 }
 .skill-content > strong { font-size: 11px; color: var(--accent); }
-.skill-content ol { margin: 7px 0 0 17px; padding: 0; color: var(--text-secondary); }
-.skill-content li { padding-left: 2px; margin: 0 0 5px; font-size: 11px; line-height: 1.42; }
+.skill-content pre {
+  max-height: 260px;
+  margin: 7px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+  font: 10px/1.5 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
 
 /* Messages */
 .messages-area {

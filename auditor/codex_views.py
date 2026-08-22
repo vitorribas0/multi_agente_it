@@ -860,6 +860,23 @@ def codex_status(_request):
     })
 
 
+@require_GET
+def codex_skills(_request):
+    """Expõe somente os prompts das skills locais permitidas pela Atena."""
+    skill_slugs = (
+        "auditoria-interna", "aws-athena", "ciencia-dados", "analise-documentos", "documentacao-auditoria",
+    )
+    skills_root = Path(settings.BASE_DIR) / ".agents" / "skills"
+    skills = []
+    for slug in skill_slugs:
+        try:
+            content = (skills_root / slug / "SKILL.md").read_text(encoding="utf-8")
+        except OSError:
+            content = "Prompt indisponível neste ambiente."
+        skills.append({"slug": slug, "content": content})
+    return JsonResponse({"skills": skills})
+
+
 @csrf_exempt
 def codex_chat_stream(request):
     if request.method != "POST":

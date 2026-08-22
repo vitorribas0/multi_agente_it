@@ -102,10 +102,8 @@
                 </button>
                 <small>{{ skill.description }}</small>
                 <div class="skill-content" *ngIf="expandedSkill === skill.slug">
-                  <strong>O que esta skill orienta a Atena a fazer</strong>
-                  <ol>
-                    <li *ngFor="let instruction of skill.instructions">{{ instruction }}</li>
-                  </ol>
+                  <strong>Prompt real — SKILL.md</strong>
+                  <pre>{{ skill.content || 'Carregando o conteúdo da skill...' }}</pre>
                 </div>
               </div>
             </article>

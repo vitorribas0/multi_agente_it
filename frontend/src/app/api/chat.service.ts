@@ -25,6 +25,11 @@ export interface BatchProgressEvent {
   filename?: string;
 }
 
+export interface CodexSkillPrompt {
+  slug: string;
+  content: string;
+}
+
 // Payload enviado ao /api/chat/stream/.
 export interface ChatStreamRequest {
   message: string;
@@ -57,6 +62,10 @@ export class ChatService {
 
   getConversation(id: number | string): Observable<ConversationDetail> {
     return this.http.get<ConversationDetail>(`/api/conversations/${id}/`);
+  }
+
+  getCodexSkills(): Observable<{ skills: CodexSkillPrompt[] }> {
+    return this.http.get<{ skills: CodexSkillPrompt[] }>('/api/codex/skills/');
   }
 
   // Renomeia a conversa. O backend faz strip + trunca em 120 chars e devolve
