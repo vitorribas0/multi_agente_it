@@ -243,7 +243,7 @@ class CodexAppServer:
                 "sandboxPolicy": {
                     "type": "workspaceWrite",
                     "writableRoots": [str(self.cwd)],
-                    "networkAccess": False,
+                    "networkAccess": True,
                 },
             },
         })
