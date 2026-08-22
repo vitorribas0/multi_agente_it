@@ -137,12 +137,13 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   filesMenuOpen = false;
   // Skills disponíveis no ambiente isolado da Atena.
   skillsMenuOpen = false;
+  expandedSkill: string | null = null;
   readonly atenaSkills = [
-    { icon: '🛡️', name: 'Auditoria interna', description: 'Planejamento, testes, riscos, achados e recomendações.' },
-    { icon: '☁️', name: 'AWS Athena', description: 'Consultas seguras, catálogo Glue e rastreabilidade de dados.' },
-    { icon: '📈', name: 'Ciência de dados', description: 'Análise tabular, visualizações, segmentação e anomalias.' },
-    { icon: '📄', name: 'Análise de documentos', description: 'Leitura de PDFs, DOCX e imagens com evidências.' },
-    { icon: '✦', name: 'Documentação de auditoria', description: 'Relatórios, HTML, PDF e indicadores com identidade Itaú.' },
+    { slug: 'auditoria-interna', icon: '🛡️', name: 'Auditoria interna', description: 'Planejamento, testes, riscos, achados e recomendações.', instructions: ['Definir objetivo, escopo, período, população e critérios.', 'Identificar fontes disponíveis e lacunas antes de testar.', 'Criar procedimentos reproduzíveis e ligar cada conclusão à evidência.', 'Classificar severidade por impacto, probabilidade, abrangência e recorrência.', 'Redigir achados com condição, critério, causa, efeito, evidência e recomendação.', 'Separar claramente constatação, inferência e recomendação.'] },
+    { slug: 'aws-athena', icon: '☁️', name: 'AWS Athena', description: 'Consultas seguras, catálogo Glue e rastreabilidade de dados.', instructions: ['Descobrir database, tabela, colunas e tipos antes de montar a consulta.', 'Gerar somente SELECT ou WITH ... SELECT; não executar comandos de alteração.', 'Aplicar filtro de período e LIMIT exploratório quando possível.', 'Mostrar a SQL final e explicar fonte, filtros e limite usados.', 'Só afirmar que consultou Athena depois de receber resultado real.', 'Nunca ler ou exibir credenciais da .env.'] },
+    { slug: 'ciencia-dados', icon: '📈', name: 'Ciência de dados', description: 'Análise tabular, visualizações, segmentação e anomalias.', instructions: ['Inspecionar dimensões, colunas, tipos, nulos e amostra antes da análise.', 'Usar código reproduzível no sandbox e preservar o dataset original.', 'Validar contagens, denominadores e percentuais antes de apresentar resultados.', 'Normalizar acentos, caixa e pontuação em análises de texto.', 'Em clusters, excluir IDs, padronizar variáveis e comparar métricas.', 'Tratar grupos e padrões como hipóteses, nunca como causalidade comprovada.'] },
+    { slug: 'analise-documentos', icon: '📄', name: 'Análise de documentos', description: 'Leitura de PDFs, DOCX e imagens com evidências.', instructions: ['Confirmar arquivo, tipo, páginas ou abas e estrutura antes de responder.', 'Localizar ocorrências e ler o contexto ao redor para perguntas específicas.', 'Extrair cabeçalhos e linhas de tabelas sem perder unidades e notas.', 'Citar arquivo e página, seção ou aba quando o formato permitir.', 'Declarar incertezas quando o OCR não estiver confiável.', 'Não concluir que uma aba ou cláusula não existe sem listar a estrutura real.'] },
+    { slug: 'documentacao-auditoria', icon: '✦', name: 'Documentação de auditoria', description: 'Relatórios, HTML, PDF e indicadores com identidade Itaú.', instructions: ['Confirmar público, objetivo, período, fontes e formato de saída.', 'Usar apenas números verificados e identificar fonte, corte e denominador.', 'Estruturar relatórios com resumo, escopo, método, achados, riscos e recomendações.', 'Gerar HTML standalone e responsivo, sem recursos externos.', 'Priorizar hierarquia, tabelas legíveis e quebras de página nos PDFs.', 'Salvar os artefatos na pasta da conversa e informar o caminho produzido.'] },
   ];
   // Placeholder de upload em andamento (texto do que está carregando).
   uploading: string | null = null;
@@ -236,6 +237,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.uploading = null;
     this.filesMenuOpen = false;
     this.skillsMenuOpen = false;
+    this.expandedSkill = null;
     this.activePlaybook = null;
     this.playbookSuggestions = [];
     this.pendingPlaybookId = undefined;
@@ -598,10 +600,15 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   toggleSkillsMenu(): void {
     this.skillsMenuOpen = !this.skillsMenuOpen;
+    if (!this.skillsMenuOpen) this.expandedSkill = null;
     if (this.skillsMenuOpen) {
       this.attachMenuOpen = false;
       this.filesMenuOpen = false;
     }
+  }
+
+  toggleSkillContent(slug: string): void {
+    this.expandedSkill = this.expandedSkill === slug ? null : slug;
   }
 
   fileIcon(kind: 'table' | 'document'): string {
@@ -647,7 +654,10 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     // Fecha os menus ao clicar fora deles.
     if (this.attachMenuOpen && !target.closest('.attach-wrap')) this.attachMenuOpen = false;
     if (this.filesMenuOpen && !target.closest('.files-wrap')) this.filesMenuOpen = false;
-    if (this.skillsMenuOpen && !target.closest('.skills-wrap')) this.skillsMenuOpen = false;
+    if (this.skillsMenuOpen && !target.closest('.skills-wrap')) {
+      this.skillsMenuOpen = false;
+      this.expandedSkill = null;
+    }
   }
 
   pickSingle(): void {

@@ -577,6 +577,7 @@ body.html-preview-open:not(.html-preview-full) .main {
   border-radius: 10px;
 }
 .skill-row:hover { background: rgba(255,255,255,.045); }
+.skill-row.expanded { background: rgba(236, 112, 0, .075); }
 .skill-icon {
   width: 28px;
   height: 28px;
@@ -587,8 +588,35 @@ body.html-preview-open:not(.html-preview-full) .main {
   background: rgba(236, 112, 0, .12);
   font-size: 14px;
 }
+.skill-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 .skill-row strong { display: block; color: var(--text-primary); font-size: 12px; line-height: 1.35; }
 .skill-row small { display: block; margin-top: 2px; color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+.skill-row-caret { color: var(--text-muted); font-size: 14px; transition: transform .16s ease; }
+.skill-row-caret.open { transform: rotate(180deg); }
+.skill-content {
+  margin-top: 9px;
+  padding: 9px 10px 8px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  background: rgba(0,0,0,.16);
+}
+.skill-content > strong { font-size: 11px; color: var(--accent); }
+.skill-content ol { margin: 7px 0 0 17px; padding: 0; color: var(--text-secondary); }
+.skill-content li { padding-left: 2px; margin: 0 0 5px; font-size: 11px; line-height: 1.42; }
 
 /* Messages */
 .messages-area {

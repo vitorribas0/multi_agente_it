@@ -92,11 +92,21 @@
             <button type="button" class="skills-menu-close" aria-label="Fechar skills" (click)="skillsMenuOpen = false">×</button>
           </div>
           <div class="skills-menu-list">
-            <article class="skill-row" *ngFor="let skill of atenaSkills">
+            <article class="skill-row" *ngFor="let skill of atenaSkills" [class.expanded]="expandedSkill === skill.slug">
               <span class="skill-icon">{{ skill.icon }}</span>
               <div>
-                <strong>{{ skill.name }}</strong>
+                <button type="button" class="skill-toggle" (click)="toggleSkillContent(skill.slug)"
+                        [attr.aria-expanded]="expandedSkill === skill.slug">
+                  <strong>{{ skill.name }}</strong>
+                  <span class="skill-row-caret" [class.open]="expandedSkill === skill.slug">⌄</span>
+                </button>
                 <small>{{ skill.description }}</small>
+                <div class="skill-content" *ngIf="expandedSkill === skill.slug">
+                  <strong>O que esta skill orienta a Atena a fazer</strong>
+                  <ol>
+                    <li *ngFor="let instruction of skill.instructions">{{ instruction }}</li>
+                  </ol>
+                </div>
               </div>
             </article>
           </div>
