@@ -376,9 +376,9 @@ def _codex_trace_label(item: dict) -> str:
         target = " · ".join(filter(None, [str(item.get("server") or ""), str(item.get("tool") or "")]))
         return f"Consultando ferramenta · {target}" if target else "Consultando ferramenta"
     if item_type == "dynamicToolCall":
-        return f"Executando ferramenta · {item.get('tool') or 'Codex'}"
+        return f"Executando ferramenta · {item.get('tool') or 'Atena'}"
     if item_type == "collabToolCall":
-        return f"Coordenando subagente · {item.get('tool') or 'Codex'}"
+        return f"Coordenando subagente · {item.get('tool') or 'Atena'}"
     if item_type == "webSearch":
         query = _sanitize_trace_text(item.get("query"), 100)
         return f"Pesquisando na web · {query}" if query else "Pesquisando na web"
@@ -388,7 +388,7 @@ def _codex_trace_label(item: dict) -> str:
         return f"Inspecionando imagem · {Path(str(item.get('path') or 'imagem')).name}"
     if item_type == "contextCompaction":
         return "Organizando o contexto da conversa"
-    return "Executando atividade do Codex"
+    return "Executando atividade da Atena"
 
 
 def _codex_trace_result(item: dict, streamed_output: str = "") -> tuple[str, str]:
@@ -903,7 +903,7 @@ def codex_chat_stream(request):
             artifacts_dir = session_workspace / _ARTIFACTS_DIRNAME
             artifacts_before = _artifact_snapshot(artifacts_dir)
             with CodexAppServer(artifacts_dir) as client:
-                events.put({"type": "progress", "stage": "thinking", "icon": "◈", "text": "Conectando ao Codex App Server"})
+                events.put({"type": "progress", "stage": "thinking", "icon": "◈", "text": "Conectando à Atena"})
                 client.initialize()
                 thread_id = client.open_thread(old_thread_id)
                 state["codex_thread_id"] = thread_id
@@ -1069,7 +1069,7 @@ def codex_chat_stream(request):
 
             answer = "".join(answer_parts).strip()
             if not answer:
-                answer = "O Codex concluiu o turno sem produzir uma mensagem de texto."
+                answer = "A Atena concluiu o turno sem produzir uma mensagem de texto."
             generated_attachments = _collect_generated_artifacts(
                 artifacts_dir,
                 artifacts_before,
@@ -1109,7 +1109,7 @@ def codex_chat_stream(request):
                 },
             })
         except Exception as exc:
-            events.put({"type": "error", "message": f"Codex App Server: {exc}"})
+            events.put({"type": "error", "message": f"Atena: {exc}"})
         finally:
             from django.db import connection
 

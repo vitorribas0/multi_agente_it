@@ -68,15 +68,15 @@
       </div>
 
       <div class="engine-switch" aria-label="Motor da conversa">
-        <button type="button" [class.active]="engine === 'codex'" (click)="engine = 'codex'">Codex</button>
+        <button type="button" [class.active]="engine === 'codex'" (click)="engine = 'codex'">Atena</button>
         <button type="button" [class.active]="engine === 'legacy'" (click)="engine = 'legacy'">Legado</button>
       </div>
       <select *ngIf="engine === 'legacy'" id="agent-picker" class="agent-picker" [(ngModel)]="selectedAgentSlug">
         <option *ngFor="let a of agents" [value]="a.slug">{{ a.icon }} {{ a.name }}</option>
       </select>
-      <div class="model-badge" id="agent-badge" [title]="engine === 'codex' ? 'Codex App Server · escrita isolada na pasta do chat · 5 skills locais' : 'Motor multiagente original'">
+      <div class="model-badge" id="agent-badge" [title]="engine === 'codex' ? 'Atena · escrita isolada na pasta do chat · 5 habilidades locais' : 'Motor multiagente original'">
         <span class="dot" [class.codex-dot]="engine === 'codex'"></span>
-        <span *ngIf="engine === 'codex'">◈ Codex · 5 skills</span>
+        <span *ngIf="engine === 'codex'">◈ Atena · 5 habilidades</span>
         <ng-container *ngIf="engine === 'legacy'">
           <span *ngIf="selectedAgent as a">{{ a.icon }} {{ a.name }}</span>
           <span *ngIf="!selectedAgent">Multiagente</span>
@@ -91,7 +91,7 @@
       <div class="welcome-icon">{{ activePlaybook ? activePlaybook.icon : '🛡️' }}</div>
       <h1 class="welcome-title">Como posso ajudar?</h1>
       <p class="welcome-sub" *ngIf="!activePlaybook">
-        <ng-container *ngIf="engine === 'codex'">Seu frontend, agora conectado ao Codex App Server.<br>Sandbox protegido e skills de auditoria carregadas.</ng-container>
+        <ng-container *ngIf="engine === 'codex'">Você está conversando com a Atena.<br>Área protegida e habilidades de auditoria carregadas.</ng-container>
         <ng-container *ngIf="engine === 'legacy'">Sou seu assistente de auditoria multiagente.<br>Descreva o que deseja auditar e eu farei a análise completa.</ng-container>
       </p>
       <p class="welcome-sub" *ngIf="activePlaybook">
