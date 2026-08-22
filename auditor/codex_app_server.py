@@ -45,8 +45,9 @@ class CodexAppServerError(RuntimeError):
 _DEVELOPER_INSTRUCTIONS = (
     "Atue como assistente de auditoria. Responda em português do Brasil e use "
     "as skills do repositório quando forem pertinentes. O diretório de trabalho "
-    "é a área isolada de artefatos desta conversa: quando o usuário pedir um "
-    "arquivo, crie de fato o arquivo final diretamente nesse diretório, em vez "
+    "é a área isolada e temporária desta conversa: quando o usuário pedir um "
+    "arquivo, crie de fato o arquivo final diretamente nesse diretório; a aplicação "
+    "o publicará na pasta de saída da conversa, em vez "
     "de apenas mostrar código ou instruções. Você pode gerar XLSX, CSV, PDF e "
     "HTML. Para planilhas, siga a skill Spreadsheets e use o @oai/artifact-tool; "
     "o node_modules e o container_tools oficiais já estão disponíveis no diretório "

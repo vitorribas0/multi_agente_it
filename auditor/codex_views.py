@@ -28,7 +28,11 @@ from tools.gerar_html import gerar_html
 _HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _HTML_EXPORT_PREFIX = "/api/exports/"
 _CONVERSATION_ARTIFACT_PREFIX = "/api/conversations/"
-_ARTIFACTS_DIRNAME = "artefatos"
+_OUTPUT_DIRNAME = "saida"
+_WORK_DIRNAME = "trabalho"
+_EVIDENCE_DIRNAME = "evidencias"
+_VERSIONS_DIRNAME = "versoes"
+_LEGACY_ARTIFACTS_DIRNAME = "artefatos"
 _GENERATED_ARTIFACT_EXTENSIONS = {".csv", ".xlsx", ".pdf", ".html", ".htm"}
 _MAX_GENERATED_ARTIFACT_BYTES = 200 * 1024 * 1024
 _MAX_GENERATED_ARTIFACTS_PER_TURN = 20
@@ -519,7 +523,7 @@ def _pdf_pages(path: Path) -> int | None:
 
 
 def _conversation_artifacts_dir(conversation_id: int) -> Path:
-    target = Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conversation_id) / _ARTIFACTS_DIRNAME
+    target = Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conversation_id) / _OUTPUT_DIRNAME
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -529,7 +533,7 @@ def _conversation_artifact_url(conversation_id: int, filename: str) -> str:
 
 
 def _generated_artifact_attachment(path: Path, conversation_id: int) -> dict | None:
-    """Versiona um artefato dentro da caixa do chat e cria seu card."""
+    """Publica a saída final e arquiva a versão anterior, quando existente."""
     try:
         size = path.stat().st_size
     except OSError:
@@ -543,18 +547,26 @@ def _generated_artifact_attachment(path: Path, conversation_id: int) -> dict | N
     formato = "html" if source_suffix == ".htm" else source_suffix.lstrip(".")
     safe_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", path.stem).strip("_")[:50]
     safe_stem = safe_stem or "artefato"
-    version_filename = f"{safe_stem}_{uuid4().hex[:8]}.{formato}"
-    version_path = _conversation_artifacts_dir(conversation_id) / version_filename
+    published_filename = f"{safe_stem}.{formato}"
+    output_path = _conversation_artifacts_dir(conversation_id) / published_filename
     try:
-        shutil.copy2(path, version_path)
+        if path.resolve() != output_path.resolve():
+            if output_path.exists():
+                versions_dir = (
+                    output_path.parent.parent / _VERSIONS_DIRNAME / safe_stem
+                )
+                versions_dir.mkdir(parents=True, exist_ok=True)
+                archived = versions_dir / f"{safe_stem}_{time.time_ns()}_{uuid4().hex[:6]}.{formato}"
+                shutil.copy2(output_path, archived)
+            shutil.copy2(path, output_path)
     except OSError:
         return None
 
     payload: dict = {
         "kind": "export",
         "ok": True,
-        "filename": path.name,
-        "download_url": _conversation_artifact_url(conversation_id, version_filename),
+        "filename": published_filename,
+        "download_url": _conversation_artifact_url(conversation_id, published_filename),
         "formato": formato,
         "titulo": path.stem,
         "size_kb": round(size / 1024, 1),
@@ -602,15 +614,29 @@ def _collect_generated_artifacts(
 
 
 def _generated_artifacts_manifest(workspace: Path) -> list[dict]:
-    artifacts_dir = workspace / _ARTIFACTS_DIRNAME
+    artifacts_dir = workspace / _OUTPUT_DIRNAME
     items: list[dict] = []
     for relative, (_mtime, size) in sorted(_artifact_snapshot(artifacts_dir).items()):
         items.append({
-            "arquivo": str(Path(_ARTIFACTS_DIRNAME) / relative),
+            "arquivo": str(Path(_OUTPUT_DIRNAME) / relative),
             "formato": Path(relative).suffix.lower().lstrip("."),
             "tamanho_bytes": size,
         })
     return items
+
+
+def _directory_file_manifest(root: Path) -> list[str]:
+    """Lista arquivos regulares de uma área interna, sem seguir symlinks."""
+    if not root.is_dir():
+        return []
+    files: list[str] = []
+    for path in root.rglob("*"):
+        if path.is_file() and not path.is_symlink():
+            try:
+                files.append(str(path.relative_to(root)))
+            except ValueError:
+                continue
+    return sorted(files)
 
 
 def _strip_codex_file_citations(answer: str) -> str:
@@ -688,7 +714,8 @@ def _is_html_revision_request(text: str) -> bool:
 def _latest_html_artifact(conv) -> str | None:
     """Lê com segurança o HTML do attachment mais recente da conversa."""
     export_dir = (Path(settings.BASE_DIR) / "exports").resolve()
-    artifacts_dir = _conversation_artifacts_dir(conv.id).resolve()
+    output_dir = _conversation_artifacts_dir(conv.id).resolve()
+    legacy_dir = (output_dir.parent / _LEGACY_ARTIFACTS_DIRNAME).resolve()
     for message in conv.messages.order_by("-created_at"):
         for attachment in reversed(message.attachments or []):
             if attachment.get("kind") != "export" or attachment.get("formato") != "html":
@@ -697,9 +724,12 @@ def _latest_html_artifact(conv) -> str | None:
             candidate: Path | None = None
             local_prefix = f"{_CONVERSATION_ARTIFACT_PREFIX}{conv.id}/artifacts/"
             if download_url.startswith(local_prefix):
-                candidate = (artifacts_dir / Path(download_url.removeprefix(local_prefix)).name).resolve()
-                if candidate.parent != artifacts_dir:
-                    continue
+                filename = Path(download_url.removeprefix(local_prefix)).name
+                candidate = (output_dir / filename).resolve()
+                if candidate.parent != output_dir or not candidate.is_file():
+                    candidate = (legacy_dir / filename).resolve()
+                    if candidate.parent != legacy_dir:
+                        continue
             elif download_url.startswith(_HTML_EXPORT_PREFIX):
                 candidate = (export_dir / Path(download_url.removeprefix(_HTML_EXPORT_PREFIX)).name).resolve()
                 if candidate.parent != export_dir:
@@ -740,25 +770,48 @@ def _revision_output_requirement() -> str:
 
 
 def _prepare_session_workspace(conv) -> Path:
-    """Materializa uma caixa de chat legível: entrada separada das saídas."""
+    """Materializa uma caixa de chat isolada, rastreável e versionável."""
     workspace = Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conv.id)
     input_dir = workspace / "entrada"
     datasets_dir = input_dir / "datasets"
     documents_dir = input_dir / "documentos"
     datasets_dir.mkdir(parents=True, exist_ok=True)
     documents_dir.mkdir(parents=True, exist_ok=True)
-    (workspace / _ARTIFACTS_DIRNAME).mkdir(parents=True, exist_ok=True)
+    for dirname in (_WORK_DIRNAME, _OUTPUT_DIRNAME, _EVIDENCE_DIRNAME, _VERSIONS_DIRNAME):
+        (workspace / dirname).mkdir(parents=True, exist_ok=True)
 
     state = conv.state or {}
+    evidence_dir = workspace / _EVIDENCE_DIRNAME
+    sources = {
+        "conversation_id": conv.id,
+        "fonte_atual": state.get("athena_last_source") or {},
+        "colunas_atuais": state.get("athena_last_columns") or [],
+        "datasets_nomeados": sorted((state.get("named_datasets") or {}).keys()),
+        "documento_atual": (state.get("documento_atual") or {}).get("filename"),
+    }
+    (evidence_dir / "fontes.json").write_text(
+        json.dumps(sources, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     manifest = {
         "conversation_id": conv.id,
+        "estrutura": {
+            "entrada": "entrada",
+            "trabalho": _WORK_DIRNAME,
+            "saida": _OUTPUT_DIRNAME,
+            "evidencias": _EVIDENCE_DIRNAME,
+            "versoes": _VERSIONS_DIRNAME,
+        },
         "fonte_atual": state.get("athena_last_source") or {},
         "colunas_atuais": state.get("athena_last_columns") or [],
         "workbooks": state.get("excel_workbooks") or {},
         "dataset_atual": None,
         "datasets_nomeados": {},
         "documento_atual": None,
+        "saidas_geradas": _generated_artifacts_manifest(workspace),
+        # Compatibilidade para consumidores anteriores do manifesto.
         "artefatos_gerados": _generated_artifacts_manifest(workspace),
+        "evidencias_registradas": _directory_file_manifest(workspace / _EVIDENCE_DIRNAME),
+        "versoes_arquivadas": _directory_file_manifest(workspace / _VERSIONS_DIRNAME),
     }
     current = state.get("athena_last_result")
     if current is not None:
@@ -792,12 +845,32 @@ def _prepare_session_workspace(conv) -> Path:
     return workspace
 
 
+def _append_turn_evidence(
+    workspace: Path,
+    trace_records: dict[str, dict],
+    live_plan: list[dict],
+    live_plan_explanation: str,
+) -> None:
+    """Persiste um registro auditável do turno sem alterar arquivos de entrada."""
+    evidence_dir = workspace / _EVIDENCE_DIRNAME
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "registrado_em_epoch": time.time(),
+        "plano": live_plan,
+        "explicacao_plano": live_plan_explanation,
+        "execucoes": list(trace_records.values()),
+    }
+    with (evidence_dir / "execucoes.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def _prompt_with_history(conv, text: str, has_codex_thread: bool) -> str:
     state = conv.state or {}
-    artifacts_dir = (
-        Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conv.id) / _ARTIFACTS_DIRNAME
+    workspace = Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conv.id)
+    has_generated_artifacts = bool(
+        _artifact_snapshot(workspace / _OUTPUT_DIRNAME)
+        or _artifact_snapshot(workspace / _LEGACY_ARTIFACTS_DIRNAME)
     )
-    has_generated_artifacts = bool(_artifact_snapshot(artifacts_dir))
     has_attached_data = any((
         state.get("athena_last_result") is not None,
         bool(state.get("named_datasets")),
@@ -985,9 +1058,9 @@ def codex_chat_stream(request):
         live_plan_explanation = ""
         try:
             session_workspace = _prepare_session_workspace(conv)
-            artifacts_dir = session_workspace / _ARTIFACTS_DIRNAME
-            artifacts_before = _artifact_snapshot(artifacts_dir)
-            with CodexAppServer(artifacts_dir) as client:
+            working_dir = session_workspace / _WORK_DIRNAME
+            working_before = _artifact_snapshot(working_dir)
+            with CodexAppServer(working_dir) as client:
                 events.put({"type": "progress", "stage": "thinking", "icon": "◈", "text": "Conectando à Atena"})
                 client.initialize()
                 thread_id = client.open_thread(old_thread_id)
@@ -995,7 +1068,7 @@ def codex_chat_stream(request):
                 state["chat_engine"] = "codex-app-server"
                 conv.state = state
                 conv.save(update_fields=["state", "updated_at"])
-                events.put({"type": "progress", "stage": "thinking", "icon": "🛡️", "text": "Sandbox isolado · escrita restrita aos artefatos deste chat"})
+                events.put({"type": "progress", "stage": "thinking", "icon": "🛡️", "text": "Sandbox isolado · trabalho separado das saídas deste chat"})
 
                 def collect_turn(turn_prompt: str) -> str:
                     nonlocal approve_all_for_turn, live_plan, live_plan_explanation
@@ -1156,16 +1229,22 @@ def codex_chat_stream(request):
             if not answer:
                 answer = "A Atena concluiu o turno sem produzir uma mensagem de texto."
             generated_attachments = _collect_generated_artifacts(
-                artifacts_dir,
-                artifacts_before,
+                working_dir,
+                working_before,
                 conv.id,
             )
-            # Atualiza o índice da sessão depois que os arquivos finais existem.
-            _prepare_session_workspace(conv)
             if generated_attachments:
                 answer = _strip_codex_file_citations(answer)
             answer, html_attachments = _materialize_html_response(answer, conv.id)
             attachments = generated_attachments + html_attachments
+            _append_turn_evidence(
+                session_workspace,
+                trace_records,
+                live_plan,
+                live_plan_explanation,
+            )
+            # Atualiza o índice somente após saídas e evidências existirem.
+            _prepare_session_workspace(conv)
             assistant = Message.objects.create(
                 conversation=conv,
                 role="assistant",

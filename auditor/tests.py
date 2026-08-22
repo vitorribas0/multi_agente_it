@@ -72,7 +72,7 @@ class CodexAppServerEventTests(SimpleTestCase):
             sent[0]["params"]["sandboxPolicy"]["writableRoots"],
             ["/tmp/chat/artefatos"],
         )
-        self.assertFalse(sent[0]["params"]["sandboxPolicy"]["networkAccess"])
+        self.assertTrue(sent[0]["params"]["sandboxPolicy"]["networkAccess"])
         self.assertEqual(events[0]["phase"], "started")
         self.assertEqual(events[0]["item"]["id"], "cmd-1")
         self.assertEqual(events[1]["type"], "activity_output")
@@ -295,7 +295,7 @@ class SessionArtifactStorageTests(SimpleTestCase):
 
             self.assertTrue(result["download_url"].startswith("/api/conversations/23/artifacts/"))
             artifact = (
-                Path(temp_dir) / "runtime" / "codex_sessions" / "23" / "artefatos" / result["filename"]
+                Path(temp_dir) / "runtime" / "codex_sessions" / "23" / "saida" / result["filename"]
             )
             self.assertTrue(artifact.exists())
             self.assertFalse((Path(temp_dir) / "exports" / result["filename"]).exists())
@@ -365,18 +365,20 @@ class CodexGeneratedArtifactTests(TestCase):
         from openpyxl import Workbook
 
         with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
-            artifacts_dir = Path(temp_dir) / "runtime" / "codex_sessions" / "7" / "artefatos"
-            before = _artifact_snapshot(artifacts_dir)
+            workspace = Path(temp_dir) / "runtime" / "codex_sessions" / "7"
+            working_dir = workspace / "trabalho"
+            before = _artifact_snapshot(working_dir)
             workbook = Workbook()
             sheet = workbook.active
             sheet.title = "Resumo"
             sheet.append(["Mês", "Valor"])
             sheet.append(["Janeiro", 100])
             sheet.append(["Fevereiro", 120])
-            generated = artifacts_dir / "orcamento.xlsx"
+            working_dir.mkdir(parents=True, exist_ok=True)
+            generated = working_dir / "orcamento.xlsx"
             workbook.save(generated)
 
-            attachments = _collect_generated_artifacts(artifacts_dir, before, 7)
+            attachments = _collect_generated_artifacts(working_dir, before, 7)
 
             self.assertTrue(generated.exists())
             self.assertEqual(len(attachments), 1)
@@ -391,12 +393,12 @@ class CodexGeneratedArtifactTests(TestCase):
                 attachment["download_url"].split("/artifacts/")[0],
                 "/api/conversations/7",
             )
-            exported = artifacts_dir / Path(attachment["download_url"]).name
+            exported = workspace / "saida" / Path(attachment["download_url"]).name
             self.assertTrue(exported.exists())
 
     def test_serves_artifact_only_from_its_conversation(self):
         with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
-            artifacts_dir = Path(temp_dir) / "runtime" / "codex_sessions" / "12" / "artefatos"
+            artifacts_dir = Path(temp_dir) / "runtime" / "codex_sessions" / "12" / "saida"
             artifacts_dir.mkdir(parents=True)
             (artifacts_dir / "relatorio.html").write_text("<html>ok</html>", encoding="utf-8")
 
@@ -408,9 +410,31 @@ class CodexGeneratedArtifactTests(TestCase):
                 404,
             )
 
+    def test_archives_previous_output_when_filename_is_reused(self):
+        with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
+            workspace = Path(temp_dir) / "runtime" / "codex_sessions" / "15"
+            working_dir = workspace / "trabalho"
+            working_dir.mkdir(parents=True)
+            generated = working_dir / "resultado.csv"
+            generated.write_text("id,valor\n1,10\n", encoding="utf-8")
+            _collect_generated_artifacts(working_dir, {}, 15)
+
+            before = _artifact_snapshot(working_dir)
+            generated.write_text("id,valor\n1,20\n", encoding="utf-8")
+            attachments = _collect_generated_artifacts(working_dir, before, 15)
+
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(
+                (workspace / "saida" / "resultado.csv").read_text(encoding="utf-8"),
+                "id,valor\n1,20\n",
+            )
+            archived = list((workspace / "versoes" / "resultado").glob("*.csv"))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(archived[0].read_text(encoding="utf-8"), "id,valor\n1,10\n")
+
     def test_does_not_republish_unchanged_artifact(self):
         with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
-            artifacts_dir = Path(temp_dir) / "artefatos"
+            artifacts_dir = Path(temp_dir) / "trabalho"
             artifacts_dir.mkdir()
             (artifacts_dir / "dados.csv").write_text("a,b\n1,2\n", encoding="utf-8")
             before = _artifact_snapshot(artifacts_dir)
@@ -423,7 +447,7 @@ class CodexGeneratedArtifactTests(TestCase):
         with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=temp_dir):
             conv = Conversation.objects.create(title="Artefatos")
             workspace = Path(temp_dir) / "runtime" / "codex_sessions" / str(conv.id)
-            artifacts_dir = workspace / "artefatos"
+            artifacts_dir = workspace / "saida"
             artifacts_dir.mkdir(parents=True)
             (artifacts_dir / "resultado.csv").write_text("id\n1\n", encoding="utf-8")
 
@@ -434,7 +458,7 @@ class CodexGeneratedArtifactTests(TestCase):
             )
             self.assertEqual(
                 manifest["artefatos_gerados"][0]["arquivo"],
-                "artefatos/resultado.csv",
+                "saida/resultado.csv",
             )
 
     def test_workspace_separates_input_data_from_outputs(self):
@@ -461,5 +485,10 @@ class CodexGeneratedArtifactTests(TestCase):
             self.assertTrue((workspace / "entrada" / "dataset_atual.json").exists())
             self.assertTrue((workspace / "entrada" / "datasets" / "001_base_de_teste.json").exists())
             self.assertTrue((workspace / "entrada" / "documentos" / "evidencia.md").exists())
+            self.assertTrue((workspace / "trabalho").is_dir())
+            self.assertTrue((workspace / "saida").is_dir())
+            self.assertTrue((workspace / "evidencias" / "fontes.json").is_file())
+            self.assertTrue((workspace / "versoes").is_dir())
             self.assertEqual(manifest["dataset_atual"], "entrada/dataset_atual.json")
             self.assertEqual(manifest["documento_atual"]["arquivo"], "entrada/documentos/evidencia.md")
+            self.assertEqual(manifest["estrutura"]["saida"], "saida")

@@ -576,7 +576,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     return Array.from(files.values()).reverse();
   }
 
-  // Saídas persistidas na pasta `artefatos/` desta conversa. A URL é própria
+  // Saídas persistidas na pasta `saida/` desta conversa. A URL é própria
   // do chat, então o menu não mistura arquivos de conversas diferentes.
   get outputFiles(): Array<{
     filename: string;

@@ -2224,15 +2224,17 @@ def export_download(request, filename: str):
 
 @require_GET
 def conversation_artifact_download(request, conv_id: int, filename: str):
-    """Serve um artefato que pertence exclusivamente a uma conversa."""
+    """Serve uma saída da conversa, com fallback para a pasta legada."""
     if not _EXPORT_FILENAME_RE.match(filename):
         raise Http404("Nome de arquivo inválido")
 
-    artifacts_dir = (
-        Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conv_id) / "artefatos"
-    ).resolve()
-    path = (artifacts_dir / filename).resolve()
-    if path.parent != artifacts_dir or not path.is_file():
+    workspace = Path(settings.BASE_DIR) / "runtime" / "codex_sessions" / str(conv_id)
+    output_dir = (workspace / "saida").resolve()
+    legacy_dir = (workspace / "artefatos").resolve()
+    path = (output_dir / filename).resolve()
+    if path.parent != output_dir or not path.is_file():
+        path = (legacy_dir / filename).resolve()
+    if path.parent not in {output_dir, legacy_dir} or not path.is_file():
         raise Http404("Arquivo não encontrado")
 
     ext = path.suffix.lstrip(".").lower()
