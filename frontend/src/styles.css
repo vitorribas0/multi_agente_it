@@ -106,16 +106,25 @@ html, body {
   flex-shrink: 0;
   position: relative;
   z-index: 2;
-  transition: width 0.25s ease, border-color 0.25s ease;
+  contain: layout paint;
+  transition:
+    width 0.2s cubic-bezier(.2, .8, .2, 1),
+    border-color 0.18s ease;
   overflow: hidden;
 }
 
 .sidebar.collapsed {
   width: 0;
   border-right-color: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+  transition:
+    width 0.2s cubic-bezier(.2, .8, .2, 1),
+    border-color 0.18s ease;
 }
 
-.sidebar.collapsed > *:not(.sidebar-collapse-btn) {
+.sidebar.collapsed > * {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease;
@@ -124,8 +133,8 @@ html, body {
 /* Botão único de toggle — fica fixo para continuar visível mesmo com a sidebar minimizada */
 .sidebar-collapse-btn {
   position: fixed;
-  top: 22px;
-  left: 224px;
+  top: 32px;
+  left: 258px;
   width: 30px;
   height: 30px;
   background: var(--bg-hover);
@@ -138,7 +147,8 @@ html, body {
   justify-content: center;
   flex-shrink: 0;
   z-index: 200;
-  transition: left 0.25s ease, background 0.15s, border-color 0.15s, color 0.15s;
+  will-change: transform;
+  transition: transform 0.2s cubic-bezier(.2, .8, .2, 1), background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .sidebar-collapse-btn:hover {
@@ -152,11 +162,11 @@ html, body {
 }
 
 /* Quando minimizada: botão vai pra borda esquerda e a seta inverte */
-.sidebar.collapsed .sidebar-collapse-btn {
-  left: 16px;
+.sidebar-collapse-btn.is-collapsed {
+  transform: translate3d(-242px, -10px, 0);
 }
 
-.sidebar.collapsed .sidebar-collapse-btn svg {
+.sidebar-collapse-btn.is-collapsed svg {
   transform: rotate(180deg);
 }
 
@@ -323,6 +333,8 @@ html, body {
   align-items: center;
   border-radius: var(--radius-sm);
   transition: background 0.15s;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 40px;
 }
 
 .history-item:hover {
@@ -745,6 +757,8 @@ body.html-preview-open:not(.html-preview-full) .main {
   display: flex;
   gap: 16px;
   animation: fadeSlideIn 0.3s ease forwards;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
 }
 
 /* Usuário: à direita (avatar depois do conteúdo) */
@@ -1807,6 +1821,17 @@ body.html-preview-open:not(.html-preview-full) .main {
   display: flex;
   align-items: center;
   gap: 10px;
+  margin-left: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.model-badge,
+.conversation-files-btn,
+.engine-switch,
+.agent-picker {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* Bandeja de arquivos da conversa — fica no canto superior direito, próxima
@@ -4614,6 +4639,7 @@ body.modal-open { overflow: hidden; }
 /* ─── Responsive ─────────────────────────────────────────── */
 @media (max-width: 720px) {
   .sidebar { display: none; }
+  .sidebar-collapse-btn { display: none; }
   .suggestions { grid-template-columns: 1fr; }
   .content-page { padding: 28px 20px; }
   .form-grid { grid-template-columns: 1fr; }
@@ -4849,9 +4875,11 @@ body {
   height: 720px;
   opacity: .95;
   background:
-    radial-gradient(ellipse at center, rgba(255, 132, 38, .13), transparent 42%),
-    conic-gradient(from 210deg, transparent, rgba(236, 112, 0, .11), transparent 38%);
-  filter: blur(70px);
+    radial-gradient(ellipse at center, rgba(255, 132, 38, .12), transparent 48%),
+    radial-gradient(ellipse at 62% 45%, rgba(236, 112, 0, .09), transparent 66%);
+  filter: none;
+  contain: paint;
+  will-change: transform;
   animation: auroraDrift 16s ease-in-out infinite alternate;
 }
 
@@ -4862,7 +4890,8 @@ body {
   height: 760px;
   opacity: .9;
   background: radial-gradient(ellipse, rgba(171, 65, 0, .12), transparent 64%);
-  filter: blur(76px);
+  filter: none;
+  contain: paint;
 }
 
 .main {
@@ -4875,18 +4904,22 @@ body {
   border-right-color: rgba(255, 255, 255, .1);
   background:
     linear-gradient(160deg, rgba(255, 255, 255, .045), transparent 32%),
-    rgba(6, 11, 17, .76);
-  -webkit-backdrop-filter: blur(28px) saturate(130%);
-  backdrop-filter: blur(28px) saturate(130%);
+    rgba(6, 11, 17, .92);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: 24px 0 70px rgba(0, 0, 0, .18);
 }
 
+.sidebar-collapse-btn {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 .brand-icon,
-.sidebar-collapse-btn,
 .nav-item,
 .new-chat-btn {
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .chat-container {
@@ -4910,9 +4943,11 @@ body {
   width: 720px;
   height: 650px;
   background:
-    radial-gradient(ellipse at 45% 55%, rgba(255, 142, 55, .14), transparent 47%),
-    conic-gradient(from 70deg, transparent 0 22%, rgba(236, 112, 0, .09) 31%, transparent 43% 100%);
-  filter: blur(58px);
+    radial-gradient(ellipse at 45% 55%, rgba(255, 142, 55, .13), transparent 52%),
+    radial-gradient(ellipse at 67% 30%, rgba(236, 112, 0, .075), transparent 62%);
+  filter: none;
+  contain: paint;
+  will-change: transform;
   animation: auroraDrift 13s ease-in-out infinite alternate-reverse;
 }
 
@@ -4922,7 +4957,8 @@ body {
   width: 720px;
   height: 720px;
   background: radial-gradient(circle, rgba(236, 112, 0, .075), transparent 66%);
-  filter: blur(45px);
+  filter: none;
+  contain: paint;
 }
 
 .chat-header,
@@ -4938,9 +4974,9 @@ body {
   border-color: rgba(255, 255, 255, .09);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, .035), transparent),
-    rgba(7, 12, 18, .56);
-  -webkit-backdrop-filter: blur(26px) saturate(145%);
-  backdrop-filter: blur(26px) saturate(145%);
+    rgba(7, 12, 18, .9);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: 0 16px 50px rgba(0, 0, 0, .16);
 }
 
@@ -4967,9 +5003,9 @@ body {
   border-color: rgba(255, 255, 255, .12);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .018)),
-    rgba(11, 18, 27, .52);
-  -webkit-backdrop-filter: blur(18px) saturate(145%);
-  backdrop-filter: blur(18px) saturate(145%);
+    rgba(11, 18, 27, .86);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07), 0 8px 25px rgba(0, 0, 0, .16);
 }
 
@@ -5027,8 +5063,8 @@ body {
     linear-gradient(145deg, rgba(255, 255, 255, .18), rgba(255, 255, 255, .025)),
     rgba(236, 112, 0, .38);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .34), 0 18px 54px rgba(236, 112, 0, .24);
-  -webkit-backdrop-filter: blur(20px);
-  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   animation: orbFloat 6s ease-in-out infinite;
 }
 
@@ -5050,7 +5086,8 @@ body {
     inset 12px 13px 25px rgba(255, 222, 197, .17),
     inset -18px -22px 32px rgba(42, 7, 0, .68),
     inset 0 0 0 1px rgba(255, 255, 255, .12);
-  animation: orbFloat 6s ease-in-out infinite, orbPulse 4.8s ease-in-out infinite;
+  animation: orbFloat 6s ease-in-out infinite;
+  will-change: transform;
   transform-style: preserve-3d;
 }
 
@@ -5061,7 +5098,7 @@ body {
   z-index: 5;
   border-radius: 50%;
   background: linear-gradient(160deg, rgba(255, 255, 255, .64), rgba(255, 255, 255, 0) 68%);
-  filter: blur(2px);
+  filter: none;
   transform: rotate(-18deg);
 }
 
@@ -5075,7 +5112,7 @@ body {
   z-index: 5;
   border-radius: 50%;
   background: radial-gradient(ellipse, rgba(255, 188, 132, .44), transparent 65%);
-  filter: blur(5px);
+  filter: none;
 }
 
 .orb-core {
@@ -5088,6 +5125,7 @@ body {
     radial-gradient(circle, rgba(255, 148, 67, .7), rgba(91, 21, 0, .18) 68%, transparent 72%);
   box-shadow: 0 0 28px rgba(255, 151, 71, .75), inset 0 0 18px rgba(255, 241, 220, .24);
   animation: coreBreathe 3.6s ease-in-out infinite;
+  will-change: transform, opacity;
 }
 
 .orb-ring {
@@ -5103,7 +5141,9 @@ body {
   border-right-color: rgba(255, 245, 235, .92);
   border-radius: 50%;
   mix-blend-mode: screen;
-  filter: drop-shadow(0 0 5px rgba(255, 154, 79, .9));
+  filter: none;
+  box-shadow: 0 0 8px rgba(255, 154, 79, .62);
+  will-change: transform;
 }
 
 .ring-one { transform: rotate(14deg); animation: ringOne 7s linear infinite; }
@@ -5121,7 +5161,7 @@ body {
   background: rgba(255, 255, 255, .86);
   box-shadow: 0 0 12px rgba(255, 255, 255, .72);
   transform: rotate(-28deg);
-  filter: blur(.5px);
+  filter: none;
 }
 
 .welcome-title {
@@ -5132,7 +5172,8 @@ body {
   background: linear-gradient(112deg, #fff 12%, #f4e9e0 52%, #c6a58e 100%);
   -webkit-background-clip: text;
   background-clip: text;
-  filter: drop-shadow(0 8px 25px rgba(0, 0, 0, .26));
+  filter: none;
+  text-shadow: 0 8px 25px rgba(0, 0, 0, .26);
 }
 
 .welcome-sub {
@@ -5154,9 +5195,9 @@ body {
   border-color: rgba(255, 255, 255, .1);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .012)),
-    rgba(10, 17, 25, .52);
-  -webkit-backdrop-filter: blur(18px) saturate(135%);
-  backdrop-filter: blur(18px) saturate(135%);
+    rgba(10, 17, 25, .82);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .055), 0 12px 38px rgba(0, 0, 0, .17);
 }
 
@@ -5189,8 +5230,8 @@ body {
 .agent-interaction,
 .execution-history,
 .tool-call {
-  -webkit-backdrop-filter: blur(20px) saturate(135%);
-  backdrop-filter: blur(20px) saturate(135%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .message-row.user-row .msg-text {
@@ -5207,7 +5248,7 @@ body {
   border-color: rgba(255, 255, 255, .11);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .065), transparent 42%),
-    rgba(14, 22, 31, .55);
+    rgba(14, 22, 31, .84);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .045), 0 10px 32px rgba(0, 0, 0, .14);
 }
 
@@ -5228,9 +5269,9 @@ body {
   border-color: rgba(255, 255, 255, .16);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .09), rgba(255, 255, 255, .018) 40%),
-    rgba(12, 20, 29, .68);
-  -webkit-backdrop-filter: blur(28px) saturate(155%);
-  backdrop-filter: blur(28px) saturate(155%);
+    rgba(12, 20, 29, .9);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, .1),
     inset 0 -1px 0 rgba(255, 255, 255, .025),
@@ -5350,9 +5391,9 @@ body {
   border-radius: 14px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .09), rgba(255, 255, 255, .016)),
-    rgba(10, 17, 25, .55);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
-  backdrop-filter: blur(20px) saturate(150%);
+    rgba(10, 17, 25, .86);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, .09),
     0 9px 28px rgba(0, 0, 0, .2),
@@ -5385,9 +5426,9 @@ body {
   overflow: hidden;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .085), transparent 40%),
-    rgba(12, 20, 29, .5);
-  -webkit-backdrop-filter: blur(22px) saturate(145%);
-  backdrop-filter: blur(22px) saturate(145%);
+    rgba(12, 20, 29, .82);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .075), 0 14px 36px rgba(0, 0, 0, .2);
 }
 
@@ -5488,9 +5529,9 @@ body {
   border-color: rgba(255, 255, 255, .11);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .065), transparent),
-    rgba(12, 20, 29, .5);
-  -webkit-backdrop-filter: blur(18px);
-  backdrop-filter: blur(18px);
+    rgba(12, 20, 29, .8);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .045), 0 8px 24px rgba(0, 0, 0, .16);
 }
 
@@ -5507,9 +5548,9 @@ body {
   border-radius: 18px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .07), transparent 42%),
-    rgba(11, 18, 26, .46);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
-  backdrop-filter: blur(22px) saturate(140%);
+    rgba(11, 18, 26, .8);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .055), 0 15px 44px rgba(0, 0, 0, .16);
 }
 
@@ -5527,9 +5568,9 @@ body {
   border-radius: 15px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .055), transparent),
-    rgba(10, 17, 25, .42);
-  -webkit-backdrop-filter: blur(18px);
-  backdrop-filter: blur(18px);
+    rgba(10, 17, 25, .78);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .config-tab {
@@ -5554,9 +5595,9 @@ body {
   border-color: rgba(255, 255, 255, .1);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .065), transparent 38%),
-    rgba(12, 20, 29, .5);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
-  backdrop-filter: blur(22px) saturate(140%);
+    rgba(12, 20, 29, .8);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05), 0 16px 45px rgba(0, 0, 0, .15);
 }
 
@@ -5620,14 +5661,16 @@ body {
   background:
     linear-gradient(170deg, rgba(255, 255, 255, .048), rgba(255, 255, 255, .008) 42%, rgba(2, 5, 9, .18) 69%, transparent 82%),
     radial-gradient(ellipse at 62% 14%, rgba(236, 112, 0, .075), transparent 48%);
-  -webkit-backdrop-filter: blur(8px) saturate(125%);
-  backdrop-filter: blur(8px) saturate(125%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow:
     inset 0 18px 34px rgba(255, 255, 255, .018),
     inset 0 -36px 65px rgba(0, 0, 0, .16),
     0 -1px 0 rgba(255, 165, 96, .045),
     0 24px 70px rgba(0, 0, 0, .1);
   transform-origin: center;
+  contain: paint;
+  will-change: transform;
 }
 
 .glass-wave::after {
@@ -5682,7 +5725,7 @@ body {
   opacity: .34;
   border-color: rgba(255, 151, 76, .08);
   background: radial-gradient(ellipse at center, rgba(236, 112, 0, .13), rgba(236, 112, 0, .025) 42%, transparent 70%);
-  filter: blur(28px);
+  filter: none;
   transform: rotate(-18deg);
   animation: glassWaveGlow 14s ease-in-out infinite alternate;
 }
@@ -5719,9 +5762,37 @@ body {
   .glass-wave { animation: none !important; }
 }
 
-/* O blur de vidro cria uma área de recorte. Ao recolher a sidebar, libera
-   somente o overflow do contêiner vazio para o botão de retorno continuar
-   visível e clicável fora da largura de 0px. */
-.sidebar.collapsed {
-  overflow: visible;
+/* Faixas estreitas: preserva uma única linha de controles sem colisões. */
+@media (max-width: 960px) {
+  .chat-header { padding-inline: 18px; }
+  .skills-badge-unit { display: none; }
+}
+
+@media (min-width: 721px) and (max-width: 960px), (max-width: 640px) {
+  .chat-header-title {
+    width: 38px;
+    min-width: 38px;
+    padding-inline: 13px;
+    gap: 0;
+    flex: 0 0 38px;
+    font-size: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .skills-badge-brand { display: none; }
+}
+
+@media (max-width: 520px) {
+  .welcome-state {
+    height: auto;
+    min-height: 100%;
+    justify-content: flex-start;
+    padding-bottom: 32px;
+  }
+}
+
+@media (max-width: 340px) {
+  .chat-header { padding-inline: 12px; }
+  .chat-header-title { display: none; }
 }

@@ -1,11 +1,17 @@
 <div class="app">
+  <button class="sidebar-collapse-btn"
+          [class.is-collapsed]="sidebarCollapsed"
+          [attr.aria-label]="sidebarCollapsed ? 'Expandir menu lateral' : 'Minimizar menu lateral'"
+          [attr.aria-expanded]="!sidebarCollapsed"
+          [title]="sidebarCollapsed ? 'Expandir menu lateral' : 'Minimizar menu lateral'"
+          (click)="toggleSidebar()">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M15 18l-6-6 6-6"/>
+    </svg>
+  </button>
+
   <!-- Sidebar (espelha base.html) -->
   <aside class="sidebar" id="sidebar" [class.collapsed]="sidebarCollapsed">
-    <button class="sidebar-collapse-btn" title="Minimizar/expandir sidebar" (click)="toggleSidebar()">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M15 18l-6-6 6-6"/>
-      </svg>
-    </button>
     <div class="sidebar-header">
       <div class="sidebar-brand">
         <div class="brand-icon">🛡️</div>
