@@ -716,6 +716,7 @@ def chat_stream(request):
     response = StreamingHttpResponse(stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"
     response["X-Accel-Buffering"] = "no"  # desliga buffering do nginx, se houver
+    response["X-Conversation-Id"] = str(conv.id)
     return response
 
 
@@ -727,8 +728,18 @@ def chat_stop(request, conv_id):
     Seta o event de stop registrado pelo turno corrente; o loop do agente o
     detecta no próximo passo e encerra preservando os resultados parciais.
     """
-    stopped = request_stop(conv_id)
-    return JsonResponse({"status": "success", "stopped": stopped})
+    legacy_stopped = request_stop(conv_id)
+    # Import local evita ciclo de módulos: codex_views reutiliza helpers desta
+    # view, enquanto este endpoint unifica o botão Parar dos dois motores.
+    from .codex_views import request_codex_stop
+
+    codex_stopped = request_codex_stop(conv_id)
+    return JsonResponse({
+        "status": "success",
+        "stopped": legacy_stopped or codex_stopped,
+        "legacy_stopped": legacy_stopped,
+        "codex_stopped": codex_stopped,
+    })
 
 
 # ── Configuração: agentes, modelos e tools ──────────────────────────

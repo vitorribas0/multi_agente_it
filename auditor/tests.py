@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -19,15 +20,27 @@ from .codex_views import (
     _prompt_with_history,
     _split_html_response,
     _strip_codex_file_citations,
+    _register_codex_execution,
+    _unregister_codex_execution,
 )
 from .models import Conversation, Message
 from tools.gerar_html import gerar_html
 
 
 class CodexAppServerEventTests(SimpleTestCase):
-    def test_streams_complete_activity_lifecycle_and_command_output(self):
+    @staticmethod
+    def _client() -> CodexAppServer:
         client = object.__new__(CodexAppServer)
         client.cwd = Path("/tmp/chat/artefatos")
+        client._turn_lock = threading.Lock()
+        client._active_thread_id = None
+        client._active_turn_id = None
+        client._interrupt_requested = threading.Event()
+        client._interrupt_sent = threading.Event()
+        return client
+
+    def test_streams_complete_activity_lifecycle_and_command_output(self):
+        client = self._client()
         sent = []
         client._send = lambda payload: sent.append(payload)
         client._messages = lambda: iter([
@@ -80,8 +93,7 @@ class CodexAppServerEventTests(SimpleTestCase):
         self.assertEqual(events[3]["type"], "completed")
 
     def test_routes_interactive_request_and_live_plan(self):
-        client = object.__new__(CodexAppServer)
-        client.cwd = Path("/tmp/chat/artefatos")
+        client = self._client()
         sent = []
         client._send = lambda payload: sent.append(payload)
         client._messages = lambda: iter([
@@ -117,6 +129,30 @@ class CodexAppServerEventTests(SimpleTestCase):
         self.assertEqual(events[0]["type"], "plan")
         self.assertEqual(events[0]["plan"][0]["status"], "inProgress")
 
+    def test_interrupt_uses_the_active_thread_and_turn_ids(self):
+        client = self._client()
+        sent = []
+        client._send = lambda payload: sent.append(payload)
+
+        def messages():
+            yield {
+                "id": 4,
+                "result": {"turn": {"id": "turn-9", "status": "inProgress", "items": []}},
+            }
+            self.assertTrue(client.interrupt())
+            yield {
+                "method": "turn/completed",
+                "params": {"turn": {"id": "turn-9", "status": "interrupted", "items": []}},
+            }
+
+        client._messages = messages
+
+        events = list(client.turn("thread-7", "analise longa"))
+
+        self.assertEqual(sent[1]["method"], "turn/interrupt")
+        self.assertEqual(sent[1]["params"], {"threadId": "thread-7", "turnId": "turn-9"})
+        self.assertEqual(events[-1]["status"], "interrupted")
+
 
 class LivePlanProgressTests(SimpleTestCase):
     def test_advances_the_active_step_after_a_completed_action(self):
@@ -139,6 +175,36 @@ class CodexInteractionEndpointTests(TestCase):
     def tearDown(self):
         with _PENDING_INTERACTIONS_LOCK:
             _PENDING_INTERACTIONS.clear()
+
+    def test_stop_endpoint_interrupts_an_active_codex_execution(self):
+        conversation = Conversation.objects.create(title="Execução longa")
+        execution = _register_codex_execution(conversation.id)
+
+        class FakeClient:
+            interrupted = False
+            closed = False
+
+            def interrupt(self):
+                self.interrupted = True
+                return True
+
+            def close(self):
+                self.closed = True
+
+        fake_client = FakeClient()
+        with execution.lock:
+            execution.client = fake_client
+        try:
+            response = self.client.post(f"/api/conversations/{conversation.id}/stop/")
+            payload = response.json()
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(payload["stopped"])
+            self.assertTrue(payload["codex_stopped"])
+            self.assertTrue(execution.stop_event.is_set())
+            self.assertTrue(fake_client.interrupted)
+        finally:
+            _unregister_codex_execution(execution)
 
     def test_submits_all_question_answers(self):
         pending = _PendingCodexInteraction(

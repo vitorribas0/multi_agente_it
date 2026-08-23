@@ -427,7 +427,13 @@
           <path d="M12 19V5M5 12l7-7 7 7"/>
         </svg>
       </button>
-      <button class="send-btn" *ngIf="isLoading" (click)="stop()" title="Parar geração">
+      <button
+        class="send-btn is-stop"
+        *ngIf="isLoading"
+        [disabled]="stopRequested"
+        (click)="stop()"
+        [title]="stopRequested ? 'Interrompendo no servidor…' : 'Parar geração'"
+      >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="#fff" stroke="none">
           <rect x="6" y="6" width="12" height="12" rx="2"/>
         </svg>

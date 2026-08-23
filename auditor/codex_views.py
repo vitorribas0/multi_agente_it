@@ -97,6 +97,114 @@ class _PendingCodexInteraction:
 _PENDING_INTERACTIONS: dict[str, _PendingCodexInteraction] = {}
 _PENDING_INTERACTIONS_LOCK = threading.Lock()
 _INTERACTION_TIMEOUT_SECONDS = 10 * 60
+_CODEX_FORCE_STOP_SECONDS = 2.0
+
+
+@dataclass
+class _ActiveCodexExecution:
+    conversation_id: int
+    stop_event: threading.Event = field(default_factory=threading.Event)
+    client: CodexAppServer | None = None
+    force_timer: threading.Timer | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+_ACTIVE_CODEX_EXECUTIONS: dict[int, _ActiveCodexExecution] = {}
+_ACTIVE_CODEX_EXECUTIONS_LOCK = threading.Lock()
+
+
+class _CodexExecutionStopped(RuntimeError):
+    pass
+
+
+def _register_codex_execution(conversation_id: int) -> _ActiveCodexExecution:
+    execution = _ActiveCodexExecution(conversation_id)
+    with _ACTIVE_CODEX_EXECUTIONS_LOCK:
+        previous = _ACTIVE_CODEX_EXECUTIONS.get(conversation_id)
+        _ACTIVE_CODEX_EXECUTIONS[conversation_id] = execution
+    if previous is not None:
+        previous.stop_event.set()
+        with previous.lock:
+            previous_client = previous.client
+        if previous_client is not None:
+            try:
+                previous_client.interrupt()
+            except CodexAppServerError:
+                previous_client.close()
+    return execution
+
+
+def _attach_codex_client(execution: _ActiveCodexExecution, client: CodexAppServer) -> None:
+    with execution.lock:
+        execution.client = client
+        should_stop = execution.stop_event.is_set()
+    if should_stop:
+        client.interrupt()
+
+
+def _release_pending_interactions(conversation_id: int) -> None:
+    with _PENDING_INTERACTIONS_LOCK:
+        pending_items = [
+            pending
+            for pending in _PENDING_INTERACTIONS.values()
+            if pending.conversation_id == conversation_id and not pending.ready.is_set()
+        ]
+        for pending in pending_items:
+            pending.response = _safe_interaction_fallback(pending.method)
+            pending.ready.set()
+
+
+def _force_stop_codex_execution(execution: _ActiveCodexExecution) -> None:
+    with _ACTIVE_CODEX_EXECUTIONS_LOCK:
+        if _ACTIVE_CODEX_EXECUTIONS.get(execution.conversation_id) is not execution:
+            return
+    with execution.lock:
+        client = execution.client
+    if client is not None:
+        client.close()
+
+
+def request_codex_stop(conversation_id: int) -> bool:
+    """Interrompe o turno Codex ativo e arma um encerramento de segurança."""
+    with _ACTIVE_CODEX_EXECUTIONS_LOCK:
+        execution = _ACTIVE_CODEX_EXECUTIONS.get(conversation_id)
+    if execution is None:
+        return False
+
+    execution.stop_event.set()
+    _release_pending_interactions(conversation_id)
+    with execution.lock:
+        client = execution.client
+        timer = execution.force_timer
+    if client is not None:
+        try:
+            client.interrupt()
+        except CodexAppServerError:
+            client.close()
+    if timer is None:
+        force_timer = threading.Timer(
+            _CODEX_FORCE_STOP_SECONDS,
+            _force_stop_codex_execution,
+            args=(execution,),
+        )
+        force_timer.daemon = True
+        with execution.lock:
+            if execution.force_timer is None:
+                execution.force_timer = force_timer
+                force_timer.start()
+    return True
+
+
+def _unregister_codex_execution(execution: _ActiveCodexExecution) -> None:
+    with _ACTIVE_CODEX_EXECUTIONS_LOCK:
+        if _ACTIVE_CODEX_EXECUTIONS.get(execution.conversation_id) is execution:
+            _ACTIVE_CODEX_EXECUTIONS.pop(execution.conversation_id, None)
+    with execution.lock:
+        timer = execution.force_timer
+        execution.force_timer = None
+        execution.client = None
+    if timer is not None:
+        timer.cancel()
 
 
 def _interaction_public_payload(token: str, method: str, params: dict) -> dict:
@@ -1046,6 +1154,7 @@ def codex_chat_stream(request):
 
     events: "queue.Queue[dict]" = queue.Queue()
     sentinel = object()
+    execution = _register_codex_execution(conv.id)
 
     def worker() -> None:
         answer_parts: list[str] = []
@@ -1056,13 +1165,71 @@ def codex_chat_stream(request):
         trace_completed: set[str] = set()
         live_plan: list[dict] = []
         live_plan_explanation = ""
+        session_workspace: Path | None = None
+
+        def finish_stopped() -> None:
+            for item_id, record in trace_records.items():
+                if item_id not in trace_completed:
+                    record["error"] = record["error"] or "Atividade interrompida pelo usuário."
+                    record["result"] = record["result"] or "Execução interrompida."
+                    started_at = trace_started_at.get(item_id)
+                    if started_at is not None:
+                        record["duration_ms"] = round(
+                            (time.monotonic() - started_at) * 1000
+                        )
+            if session_workspace is not None:
+                try:
+                    _append_turn_evidence(
+                        session_workspace,
+                        trace_records,
+                        live_plan,
+                        live_plan_explanation,
+                    )
+                    _prepare_session_workspace(conv)
+                except OSError:
+                    pass
+            assistant = Message.objects.create(
+                conversation=conv,
+                role="assistant",
+                content="⏹️ Geração interrompida pelo usuário.",
+            )
+            for record in trace_records.values():
+                ToolCall.objects.create(
+                    message=assistant,
+                    tool_name=record["tool"],
+                    args=record["args"],
+                    result=record["result"],
+                    error=record["error"],
+                    duration_ms=record["duration_ms"],
+                )
+            events.put({
+                "type": "done",
+                "payload": {
+                    "status": "success",
+                    "conversation_id": conv.id,
+                    "conversation_title": conv.title,
+                    "agent_slug": conv.agent.slug if conv.agent else None,
+                    "engine": "codex-app-server",
+                    "awaiting_human_input": False,
+                    "stopped": True,
+                    "reply": _message_payload(assistant),
+                },
+            })
+
         try:
+            if execution.stop_event.is_set():
+                raise _CodexExecutionStopped()
             session_workspace = _prepare_session_workspace(conv)
             working_dir = session_workspace / _WORK_DIRNAME
             working_before = _artifact_snapshot(working_dir)
             with CodexAppServer(working_dir) as client:
+                _attach_codex_client(execution, client)
+                if execution.stop_event.is_set():
+                    raise _CodexExecutionStopped()
                 events.put({"type": "progress", "stage": "thinking", "icon": "◈", "text": "Conectando à Atena"})
                 client.initialize()
+                if execution.stop_event.is_set():
+                    raise _CodexExecutionStopped()
                 thread_id = client.open_thread(old_thread_id)
                 state["codex_thread_id"] = thread_id
                 state["chat_engine"] = "codex-app-server"
@@ -1072,6 +1239,9 @@ def codex_chat_stream(request):
 
                 def collect_turn(turn_prompt: str) -> str:
                     nonlocal approve_all_for_turn, live_plan, live_plan_explanation
+
+                    if execution.stop_event.is_set():
+                        raise _CodexExecutionStopped()
 
                     def handle_server_request(method: str, params: dict) -> dict:
                         nonlocal approve_all_for_turn
@@ -1190,12 +1360,18 @@ def codex_chat_stream(request):
                                     current + str(event.get("text") or "")
                                 )
                         elif event["type"] == "completed" and event.get("status") != "completed":
+                            if execution.stop_event.is_set() or event.get("status") == "interrupted":
+                                raise _CodexExecutionStopped()
                             raise CodexAppServerError(
                                 str(event.get("error") or "Turno não concluído.")
                             )
+                    if execution.stop_event.is_set():
+                        raise _CodexExecutionStopped()
                     return "".join(parts).strip()
 
                 answer = collect_turn(prompt)
+                if execution.stop_event.is_set():
+                    raise _CodexExecutionStopped()
                 if revision_html and _split_html_response(answer)[1] is None:
                     events.put({
                         "type": "progress",
@@ -1216,6 +1392,8 @@ def codex_chat_stream(request):
 
                 answer_parts.append(answer)
 
+            if execution.stop_event.is_set():
+                raise _CodexExecutionStopped()
             for item_id, record in trace_records.items():
                 if item_id not in trace_completed:
                     started_at = trace_started_at.get(item_id)
@@ -1272,11 +1450,17 @@ def codex_chat_stream(request):
                     "reply": _message_payload(assistant),
                 },
             })
+        except _CodexExecutionStopped:
+            finish_stopped()
         except Exception as exc:
-            events.put({"type": "error", "message": f"Atena: {exc}"})
+            if execution.stop_event.is_set():
+                finish_stopped()
+            else:
+                events.put({"type": "error", "message": f"Atena: {exc}"})
         finally:
             from django.db import connection
 
+            _unregister_codex_execution(execution)
             Conversation.objects.filter(pk=conv.id).update(awaiting_human_input=False)
             connection.close()
             events.put(sentinel)
@@ -1297,4 +1481,5 @@ def codex_chat_stream(request):
     response = StreamingHttpResponse(stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"
     response["X-Accel-Buffering"] = "no"
+    response["X-Conversation-Id"] = str(conv.id)
     return response

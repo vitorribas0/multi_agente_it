@@ -95,6 +95,13 @@ class CodexAppServer:
             / "spreadsheets"
             / "container_tools"
         )
+        self._send_lock = threading.Lock()
+        self._close_lock = threading.Lock()
+        self._turn_lock = threading.Lock()
+        self._active_thread_id: str | None = None
+        self._active_turn_id: str | None = None
+        self._interrupt_requested = threading.Event()
+        self._interrupt_sent = threading.Event()
         self._ensure_runtime_link("node_modules", node_modules)
         self._ensure_runtime_link("container_tools", spreadsheet_tools)
         process_env = os.environ.copy()
@@ -144,10 +151,57 @@ class CodexAppServer:
                 self._stderr.pop(0)
 
     def _send(self, payload: dict) -> None:
-        if not self.process.stdin:
-            raise CodexAppServerError("Canal de entrada do Codex indisponível.")
-        self.process.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        self.process.stdin.flush()
+        with self._send_lock:
+            if self.process.poll() is not None or not self.process.stdin:
+                raise CodexAppServerError("Canal de entrada do Codex indisponível.")
+            try:
+                self.process.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                self.process.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                raise CodexAppServerError(
+                    "Codex App Server encerrou antes de receber a solicitação."
+                ) from exc
+
+    def _remember_active_turn(self, thread_id: str, turn: dict) -> None:
+        turn_id = turn.get("id") if isinstance(turn, dict) else None
+        if not turn_id:
+            return
+        with self._turn_lock:
+            self._active_thread_id = thread_id
+            self._active_turn_id = str(turn_id)
+        self._send_interrupt_if_ready()
+
+    def _send_interrupt_if_ready(self) -> bool:
+        with self._turn_lock:
+            if (
+                not self._interrupt_requested.is_set()
+                or self._interrupt_sent.is_set()
+                or not self._active_thread_id
+                or not self._active_turn_id
+            ):
+                return False
+            thread_id = self._active_thread_id
+            turn_id = self._active_turn_id
+            self._interrupt_sent.set()
+        try:
+            self._send({
+                "method": "turn/interrupt",
+                "id": 5,
+                "params": {"threadId": thread_id, "turnId": turn_id},
+            })
+        except Exception:
+            self._interrupt_sent.clear()
+            raise
+        return True
+
+    def interrupt(self) -> bool:
+        """Solicita a interrupção do turno ativo pelo protocolo do App Server.
+
+        Se o clique chegar antes da resposta de ``turn/start``, a intenção fica
+        registrada e a interrupção é enviada assim que o ``turnId`` aparecer.
+        """
+        self._interrupt_requested.set()
+        return self._send_interrupt_if_ready()
 
     def _messages(self) -> Iterator[dict]:
         if not self.process.stdout:
@@ -233,6 +287,10 @@ class CodexAppServer:
         prompt: str,
         server_request_handler: Callable[[str, dict], dict] | None = None,
     ) -> Iterator[dict]:
+        with self._turn_lock:
+            self._active_thread_id = thread_id
+            self._active_turn_id = None
+            self._interrupt_sent.clear()
         self._send({
             "method": "turn/start",
             "id": 4,
@@ -250,86 +308,97 @@ class CodexAppServer:
         })
 
         message_phases: dict[str, str | None] = {}
-        for message in self._messages():
-            if message.get("id") == 4 and "error" in message:
-                error = message["error"]
-                raise CodexAppServerError(error.get("message", str(error)))
+        try:
+            for message in self._messages():
+                if message.get("id") == 4:
+                    if "error" in message:
+                        error = message["error"]
+                        raise CodexAppServerError(error.get("message", str(error)))
+                    result = message.get("result") or {}
+                    self._remember_active_turn(thread_id, result.get("turn") or {})
 
-            method = message.get("method")
-            params = message.get("params") or {}
-            if message.get("id") is not None and method in _SERVER_REQUEST_METHODS:
-                if server_request_handler is None:
-                    if method == "item/permissions/requestApproval":
-                        result = {"permissions": {}, "scope": "turn"}
-                    elif method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
-                        result = {"answers": {}}
+                method = message.get("method")
+                params = message.get("params") or {}
+                if method == "turn/started":
+                    self._remember_active_turn(thread_id, params.get("turn") or {})
+                elif message.get("id") is not None and method in _SERVER_REQUEST_METHODS:
+                    if server_request_handler is None:
+                        if method == "item/permissions/requestApproval":
+                            result = {"permissions": {}, "scope": "turn"}
+                        elif method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
+                            result = {"answers": {}}
+                        else:
+                            result = {"decision": "decline"}
                     else:
-                        result = {"decision": "decline"}
-                else:
-                    result = server_request_handler(method, params)
-                self._send({"id": message["id"], "result": result})
-            elif method == "turn/plan/updated":
-                yield {
-                    "type": "plan",
-                    "explanation": params.get("explanation") or "",
-                    "plan": params.get("plan") or [],
-                }
-            elif method == "item/agentMessage/delta":
-                delta = params.get("delta") or ""
-                if delta:
+                        result = server_request_handler(method, params)
+                    self._send({"id": message["id"], "result": result})
+                elif method == "turn/plan/updated":
                     yield {
-                        "type": "delta",
-                        "text": delta,
-                        "phase": message_phases.get(params.get("itemId")),
+                        "type": "plan",
+                        "explanation": params.get("explanation") or "",
+                        "plan": params.get("plan") or [],
                     }
-            elif method == "item/started":
-                item = params.get("item") or {}
-                item_type = item.get("type")
-                if item_type == "agentMessage":
-                    message_phases[item.get("id", "")] = item.get("phase")
-                if item_type in _TRACE_ITEM_TYPES:
+                elif method == "item/agentMessage/delta":
+                    delta = params.get("delta") or ""
+                    if delta:
+                        yield {
+                            "type": "delta",
+                            "text": delta,
+                            "phase": message_phases.get(params.get("itemId")),
+                        }
+                elif method == "item/started":
+                    item = params.get("item") or {}
+                    item_type = item.get("type")
+                    if item_type == "agentMessage":
+                        message_phases[item.get("id", "")] = item.get("phase")
+                    if item_type in _TRACE_ITEM_TYPES:
+                        yield {
+                            "type": "activity",
+                            "phase": "started",
+                            "activity": item_type,
+                            "item": item,
+                        }
+                elif method == "item/completed":
+                    item = params.get("item") or {}
+                    item_type = item.get("type")
+                    if item_type == "agentMessage":
+                        message_phases[item.get("id", "")] = item.get("phase")
+                    if item_type in _TRACE_ITEM_TYPES:
+                        yield {
+                            "type": "activity",
+                            "phase": "completed",
+                            "activity": item_type,
+                            "item": item,
+                        }
+                elif method == "item/commandExecution/outputDelta":
+                    delta = params.get("delta") or ""
+                    if delta:
+                        yield {
+                            "type": "activity_output",
+                            "item_id": params.get("itemId"),
+                            "text": delta,
+                        }
+                elif method == "turn/completed":
+                    turn = params.get("turn") or {}
                     yield {
-                        "type": "activity",
-                        "phase": "started",
-                        "activity": item_type,
-                        "item": item,
+                        "type": "completed",
+                        "status": turn.get("status"),
+                        "error": turn.get("error"),
                     }
-            elif method == "item/completed":
-                item = params.get("item") or {}
-                item_type = item.get("type")
-                if item_type == "agentMessage":
-                    message_phases[item.get("id", "")] = item.get("phase")
-                if item_type in _TRACE_ITEM_TYPES:
-                    yield {
-                        "type": "activity",
-                        "phase": "completed",
-                        "activity": item_type,
-                        "item": item,
-                    }
-            elif method == "item/commandExecution/outputDelta":
-                delta = params.get("delta") or ""
-                if delta:
-                    yield {
-                        "type": "activity_output",
-                        "item_id": params.get("itemId"),
-                        "text": delta,
-                    }
-            elif method == "turn/completed":
-                turn = params.get("turn") or {}
-                yield {
-                    "type": "completed",
-                    "status": turn.get("status"),
-                    "error": turn.get("error"),
-                }
-                return
+                    return
+        finally:
+            with self._turn_lock:
+                self._active_thread_id = None
+                self._active_turn_id = None
 
     def close(self) -> None:
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+        with self._close_lock:
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
 
     def __enter__(self) -> "CodexAppServer":
         return self

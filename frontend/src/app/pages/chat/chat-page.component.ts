@@ -138,6 +138,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   interactionError = '';
   livePlan: CodexPlanItem[] = [];
   livePlanExplanation = '';
+  stopRequested = false;
 
   // Menu de anexos aberto?
   attachMenuOpen = false;
@@ -188,6 +189,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   private pendingPlaybookId: number | null | undefined = undefined;
 
   private controller: AbortController | null = null;
+  private activeConversationId: number | null = null;
   private shouldScroll = false;
   private routeSub?: Subscription;
 
@@ -367,6 +369,8 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
 
     this.isLoading = true;
     this.controller = new AbortController();
+    this.activeConversationId = this.conversationId;
+    this.stopRequested = false;
     this.input = '';
 
     this.messages.push({ role: 'user', content: text, tool_calls: [] });
@@ -395,6 +399,10 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
         },
         {
           signal: this.controller.signal,
+          onStarted: (conversationId) => {
+            this.activeConversationId = conversationId;
+            if (this.stopRequested) void this.stopActiveExecution();
+          },
           onProgress: (evt) => {
             this.pushProgress(evt);
             this.ingestLiveEvent(evt);
@@ -459,6 +467,8 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
 
     this.isLoading = false;
     this.controller = null;
+    this.activeConversationId = null;
+    this.stopRequested = false;
     this.scrollSoon();
   }
 
@@ -512,8 +522,32 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   stop(): void {
+    if (!this.controller || this.stopRequested) return;
+    this.stopRequested = true;
     this.cancelPendingInteraction();
-    if (this.controller) this.controller.abort();
+    if (this.activeConversationId) void this.stopActiveExecution();
+  }
+
+  private async stopActiveExecution(): Promise<void> {
+    const controller = this.controller;
+    const conversationId = this.activeConversationId;
+    if (!controller || !conversationId) return;
+    try {
+      const result = await this.chat.stopConversation(conversationId);
+      if (result.stopped && this.controller === controller) {
+        controller.abort();
+      } else if (!result.stopped) {
+        this.stopRequested = false;
+      }
+    } catch (err: any) {
+      this.stopRequested = false;
+      this.pushProgress({
+        stage: 'thinking',
+        icon: '⚠️',
+        text: `Não foi possível interromper no servidor: ${err?.message || err}`,
+      });
+      this.scrollSoon();
+    }
   }
 
   private cancelPendingInteraction(): void {

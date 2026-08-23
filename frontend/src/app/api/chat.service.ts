@@ -45,6 +45,7 @@ export interface ChatStreamRequest {
 // Callbacks do consumo do stream. onProgress recebe cada evento 'progress';
 // a Promise resolve com o payload final (evento 'done') ou {status:'error'}.
 export interface StreamHandlers {
+  onStarted?: (conversationId: number) => void;
   onProgress?: (evt: ChatProgressEvent) => void;
   onInteraction?: (interaction: CodexInteraction) => void;
   onPlan?: (evt: CodexPlanEvent) => void;
@@ -313,6 +314,11 @@ export class ChatService {
       }
     }
 
+    const startedConversationId = Number(response.headers.get('X-Conversation-Id'));
+    if (Number.isInteger(startedConversationId) && startedConversationId > 0 && handlers.onStarted) {
+      this.zone.run(() => handlers.onStarted!(startedConversationId));
+    }
+
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -351,6 +357,22 @@ export class ChatService {
     }
 
     return finalPayload || { status: 'error', message: 'Stream encerrado sem resposta.', conversation_id: 0 };
+  }
+
+  async stopConversation(conversationId: number): Promise<{ status: string; stopped: boolean }> {
+    const response = await fetch(`/api/conversations/${conversationId}/stop/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    let payload: any = null;
+    try {
+      payload = await response.json();
+    } catch {}
+    if (!response.ok) {
+      throw new Error(payload?.message || `HTTP ${response.status}`);
+    }
+    return { status: payload?.status || 'success', stopped: !!payload?.stopped };
   }
 
   async respondToCodexInteraction(token: string, payload: Record<string, unknown>): Promise<void> {
