@@ -5596,3 +5596,125 @@ body {
   .config-tabs { overflow-x: auto; }
   .config-tab { white-space: nowrap; }
 }
+
+/* Ondas de vidro fumê inspiradas nas camadas curvas da referência Aurora */
+.glass-waves {
+  position: absolute;
+  inset: 70px 0 92px;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: .9;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 13%, #000 83%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 13%, #000 83%, transparent 100%);
+}
+
+.glass-wave {
+  position: absolute;
+  left: -23%;
+  width: 146%;
+  height: 290px;
+  border: 1px solid rgba(255, 255, 255, .055);
+  border-top-color: rgba(255, 220, 193, .12);
+  border-radius: 48% 52% 46% 54% / 62% 58% 42% 38%;
+  background:
+    linear-gradient(170deg, rgba(255, 255, 255, .048), rgba(255, 255, 255, .008) 42%, rgba(2, 5, 9, .18) 69%, transparent 82%),
+    radial-gradient(ellipse at 62% 14%, rgba(236, 112, 0, .075), transparent 48%);
+  -webkit-backdrop-filter: blur(8px) saturate(125%);
+  backdrop-filter: blur(8px) saturate(125%);
+  box-shadow:
+    inset 0 18px 34px rgba(255, 255, 255, .018),
+    inset 0 -36px 65px rgba(0, 0, 0, .16),
+    0 -1px 0 rgba(255, 165, 96, .045),
+    0 24px 70px rgba(0, 0, 0, .1);
+  transform-origin: center;
+}
+
+.glass-wave::after {
+  content: '';
+  position: absolute;
+  top: 16px;
+  left: 13%;
+  right: 9%;
+  height: 1px;
+  border-radius: 50%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .1) 38%, rgba(255, 141, 61, .12) 63%, transparent);
+  filter: blur(.3px);
+}
+
+.wave-back {
+  top: 4%;
+  opacity: .45;
+  transform: rotate(-10deg) scale(1.05);
+  animation: glassWaveBack 18s ease-in-out infinite alternate;
+}
+
+.wave-middle {
+  top: 24%;
+  left: -30%;
+  height: 310px;
+  opacity: .58;
+  transform: rotate(7deg) scale(1.03);
+  background:
+    linear-gradient(166deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .009) 40%, rgba(2, 5, 9, .2) 72%, transparent 84%),
+    radial-gradient(ellipse at 38% 12%, rgba(255, 133, 45, .065), transparent 45%);
+  animation: glassWaveMiddle 21s ease-in-out infinite alternate;
+}
+
+.wave-front {
+  top: 47%;
+  left: -18%;
+  height: 330px;
+  opacity: .68;
+  transform: rotate(-6deg) scale(1.08);
+  border-top-color: rgba(255, 202, 161, .14);
+  background:
+    linear-gradient(174deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .01) 36%, rgba(1, 4, 8, .24) 73%, transparent 86%),
+    radial-gradient(ellipse at 72% 10%, rgba(236, 112, 0, .08), transparent 44%);
+  animation: glassWaveFront 16s ease-in-out infinite alternate;
+}
+
+.wave-glow {
+  top: 18%;
+  left: 42%;
+  width: 72%;
+  height: 360px;
+  opacity: .34;
+  border-color: rgba(255, 151, 76, .08);
+  background: radial-gradient(ellipse at center, rgba(236, 112, 0, .13), rgba(236, 112, 0, .025) 42%, transparent 70%);
+  filter: blur(28px);
+  transform: rotate(-18deg);
+  animation: glassWaveGlow 14s ease-in-out infinite alternate;
+}
+
+@keyframes glassWaveBack {
+  from { transform: translate3d(-1%, -2%, 0) rotate(-10deg) scale(1.05); }
+  to { transform: translate3d(3%, 3%, 0) rotate(-7deg) scale(1.09); }
+}
+
+@keyframes glassWaveMiddle {
+  from { transform: translate3d(2%, 0, 0) rotate(7deg) scale(1.03); }
+  to { transform: translate3d(-2%, 4%, 0) rotate(4deg) scale(1.08); }
+}
+
+@keyframes glassWaveFront {
+  from { transform: translate3d(-2%, 1%, 0) rotate(-6deg) scale(1.08); }
+  to { transform: translate3d(2%, -2%, 0) rotate(-3deg) scale(1.12); }
+}
+
+@keyframes glassWaveGlow {
+  from { transform: translate3d(-3%, -2%, 0) rotate(-18deg) scale(.94); opacity: .24; }
+  to { transform: translate3d(4%, 3%, 0) rotate(-13deg) scale(1.08); opacity: .4; }
+}
+
+@media (max-width: 760px) {
+  .glass-waves { inset: 70px 0 88px; opacity: .82; }
+  .glass-wave { left: -48%; width: 190%; }
+  .wave-middle { left: -52%; }
+  .wave-front { left: -40%; }
+  .wave-glow { left: 28%; width: 105%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-wave { animation: none !important; }
+}
