@@ -11,18 +11,20 @@ import threading
 import time
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
 from django.conf import settings
-from django.db import IntegrityError
-from django.http import JsonResponse, StreamingHttpResponse
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
+from django.http import HttpRequest, JsonResponse, StreamingHttpResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
 
 from .codex_app_server import CodexAppServer, CodexAppServerError
-from .models import Conversation, Execution, Message, ToolCall
+from .models import Conversation, Execution, ExecutionInteraction, Message, ToolCall
 from .views import _message_payload, _resolve_conversation
 from tools.gerar_html import gerar_html
 
@@ -157,6 +159,21 @@ def _release_pending_interactions(conversation_id: int) -> None:
         for pending in pending_items:
             pending.response = _safe_interaction_fallback(pending.method)
             pending.ready.set()
+    now = timezone.now()
+    durable_items = ExecutionInteraction.objects.filter(
+        execution__conversation_id=conversation_id,
+        status="pending",
+    )
+    for durable in durable_items:
+        ExecutionInteraction.objects.filter(
+            pk=durable.pk,
+            status="pending",
+        ).update(
+            status="cancelled",
+            response=_safe_interaction_fallback(durable.method),
+            responded_at=now,
+            updated_at=now,
+        )
 
 
 def _force_stop_codex_execution(execution: _ActiveCodexExecution) -> None:
@@ -325,6 +342,44 @@ def request_codex_execution_stop(execution: Execution) -> bool:
     if execution.status in Execution.TERMINAL_STATUSES:
         return False
     now = timezone.now()
+
+    # O backend durável roda em outro processo. O pedido fica no banco e é
+    # observado pelo worker; tentar acessar o registry em memória da API faria
+    # uma execução válida parecer órfã.
+    if execution.backend == "local-worker":
+        if execution.status == "queued":
+            changed = Execution.objects.filter(
+                pk=execution.id,
+                status="queued",
+            ).update(
+                status="stopped",
+                stop_requested_at=now,
+                finished_at=now,
+                last_heartbeat_at=now,
+                updated_at=now,
+            )
+            if not changed:
+                return False
+            _release_pending_interactions(execution.conversation_id)
+            _persist_execution_event(execution.id, {
+                "type": "done",
+                "payload": {"stopped": True},
+            })
+            return True
+
+        changed = Execution.objects.filter(
+            pk=execution.id,
+            status__in=("starting", "running", "waiting_user"),
+        ).update(
+            status="stopping",
+            stop_requested_at=now,
+            last_heartbeat_at=now,
+            updated_at=now,
+        )
+        if changed:
+            _release_pending_interactions(execution.conversation_id)
+        return bool(changed)
+
     Execution.objects.filter(pk=execution.id).update(
         status="stopping",
         stop_requested_at=now,
@@ -338,6 +393,32 @@ def request_codex_execution_stop(execution: Execution) -> bool:
             finished_at=timezone.now(),
         )
     return stopped
+
+
+def _watch_persisted_stop(
+    execution_record: Execution,
+    active_execution: _ActiveCodexExecution,
+    finished: threading.Event,
+) -> None:
+    """Traduz o estado de parada do banco para o cliente Codex do worker."""
+    from django.db import close_old_connections
+
+    close_old_connections()
+    try:
+        while not finished.wait(0.25):
+            status = Execution.objects.filter(pk=execution_record.pk).values_list(
+                "status", flat=True
+            ).first()
+            if status in {"stopping", "stopped", "failed"}:
+                request_codex_stop(
+                    execution_record.conversation_id,
+                    str(execution_record.id),
+                )
+                return
+            if status is None or status in Execution.TERMINAL_STATUSES:
+                return
+    finally:
+        close_old_connections()
 
 
 def _unregister_codex_execution(execution: _ActiveCodexExecution) -> None:
@@ -438,7 +519,156 @@ def _approve_interaction_for_turn(method: str, params: dict) -> dict:
     return {"decision": "accept"}
 
 
-def _wait_for_interaction(conv, events: "queue.Queue[dict]", method: str, params: dict) -> dict:
+def _interaction_response_from_data(method: str, params: dict, data: dict) -> tuple[dict | None, str | None, int]:
+    if data.get("approve_all") is True:
+        if method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
+            return None, "Perguntas precisam ser respondidas.", 400
+        return {
+            **_approve_interaction_for_turn(method, params),
+            "__approve_all_for_turn__": True,
+        }, None, 200
+    if data.get("cancel") is True:
+        return _safe_interaction_fallback(method), None, 200
+    if method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
+        raw_answers = data.get("answers") or {}
+        if not isinstance(raw_answers, dict):
+            return None, "Respostas inválidas.", 400
+        valid_ids = {
+            str(question.get("id"))
+            for question in (params.get("questions") or [])
+            if isinstance(question, dict) and question.get("id") is not None
+        }
+        answers = {}
+        for question_id in valid_ids:
+            values = raw_answers.get(question_id, [])
+            if isinstance(values, str):
+                values = [values]
+            if not isinstance(values, list):
+                values = []
+            cleaned = [
+                str(value).strip()[:4000]
+                for value in values[:10]
+                if str(value).strip()
+            ]
+            if cleaned:
+                answers[question_id] = {"answers": cleaned}
+        if valid_ids and len(answers) != len(valid_ids):
+            return None, "Responda todas as perguntas.", 400
+        return {"answers": answers}, None, 200
+    if method == "item/permissions/requestApproval":
+        approved = bool(data.get("approve"))
+        scope = "session" if data.get("scope") == "session" else "turn"
+        return {
+            "permissions": (params.get("permissions") or {}) if approved else {},
+            "scope": scope,
+        }, None, 200
+    decision = data.get("decision")
+    if decision not in {"accept", "acceptForSession", "decline", "cancel"}:
+        return None, "Decisão inválida.", 400
+    return {"decision": decision}, None, 200
+
+
+def _wait_for_durable_interaction(
+    conv,
+    execution_record: Execution,
+    events: "queue.Queue[dict]",
+    method: str,
+    params: dict,
+) -> dict:
+    timeout = _INTERACTION_TIMEOUT_SECONDS
+    auto_resolution_ms = params.get("autoResolutionMs")
+    if isinstance(auto_resolution_ms, (int, float)) and auto_resolution_ms > 0:
+        timeout = min(timeout, max(1, auto_resolution_ms / 1000))
+    now = timezone.now()
+    interaction = ExecutionInteraction.objects.create(
+        execution=execution_record,
+        method=method,
+        params=params,
+        expires_at=now + timedelta(seconds=timeout),
+    )
+    token = str(interaction.token)
+    Conversation.objects.filter(pk=conv.id).update(awaiting_human_input=True)
+    events.put({
+        "type": "interaction",
+        "interaction": _interaction_public_payload(token, method, params),
+    })
+
+    deadline = time.monotonic() + timeout
+    response = None
+    resolution = "expired"
+    while time.monotonic() < deadline:
+        snapshot = ExecutionInteraction.objects.filter(pk=interaction.pk).values(
+            "status", "response"
+        ).first()
+        if not snapshot:
+            break
+        if snapshot["status"] in {"responded", "cancelled"}:
+            response = snapshot["response"] or _safe_interaction_fallback(method)
+            resolution = snapshot["status"]
+            break
+        execution_status = Execution.objects.filter(pk=execution_record.pk).values_list(
+            "status", flat=True
+        ).first()
+        if execution_status in {"stopping", "stopped", "failed"}:
+            response = _safe_interaction_fallback(method)
+            resolution = "cancelled"
+            ExecutionInteraction.objects.filter(
+                pk=interaction.pk,
+                status="pending",
+            ).update(
+                status="cancelled",
+                response=response,
+                responded_at=timezone.now(),
+                updated_at=timezone.now(),
+            )
+            break
+        time.sleep(0.2)
+
+    if response is None:
+        response = _safe_interaction_fallback(method)
+        ExecutionInteraction.objects.filter(
+            pk=interaction.pk,
+            status="pending",
+        ).update(
+            status="expired",
+            response=response,
+            responded_at=timezone.now(),
+            updated_at=timezone.now(),
+        )
+    Conversation.objects.filter(pk=conv.id).update(awaiting_human_input=False)
+    events.put({"type": "interaction_resolved", "token": token})
+    if resolution == "expired":
+        events.put({
+            "type": "progress",
+            "stage": "thinking",
+            "icon": "⏱️",
+            "text": "Solicitação expirada; a ação não foi autorizada",
+        })
+    elif resolution == "responded":
+        events.put({
+            "type": "progress",
+            "stage": "thinking",
+            "icon": "▶️",
+            "text": "Resposta recebida; retomando a execução",
+        })
+    return response
+
+
+def _wait_for_interaction(
+    conv,
+    events: "queue.Queue[dict]",
+    method: str,
+    params: dict,
+    execution_record: Execution | None = None,
+) -> dict:
+    if execution_record is not None:
+        return _wait_for_durable_interaction(
+            conv,
+            execution_record,
+            events,
+            method,
+            params,
+        )
     token = uuid4().hex
     pending = _PendingCodexInteraction(conv.id, method, params)
     with _PENDING_INTERACTIONS_LOCK:
@@ -485,6 +715,35 @@ def codex_interaction_respond(request, token: str):
     except json.JSONDecodeError:
         return JsonResponse({"status": "error", "message": "JSON inválido."}, status=400)
 
+    durable = None
+    try:
+        durable = ExecutionInteraction.objects.filter(pk=token).first()
+    except (ValidationError, ValueError):
+        durable = None
+    if durable is not None:
+        if durable.status != "pending":
+            return JsonResponse({"status": "error", "message": "Solicitação já encerrada."}, status=409)
+        response, error, status_code = _interaction_response_from_data(
+            durable.method,
+            durable.params or {},
+            data,
+        )
+        if error:
+            return JsonResponse({"status": "error", "message": error}, status=status_code)
+        now = timezone.now()
+        changed = ExecutionInteraction.objects.filter(
+            pk=durable.pk,
+            status="pending",
+        ).update(
+            status="responded",
+            response=response or {},
+            responded_at=now,
+            updated_at=now,
+        )
+        if not changed:
+            return JsonResponse({"status": "error", "message": "Solicitação já respondida."}, status=409)
+        return JsonResponse({"status": "success"})
+
     with _PENDING_INTERACTIONS_LOCK:
         pending = _PENDING_INTERACTIONS.get(token)
         if pending is None:
@@ -495,59 +754,14 @@ def codex_interaction_respond(request, token: str):
         if pending.response is not None:
             return JsonResponse({"status": "error", "message": "Solicitação já respondida."}, status=409)
 
-        if data.get("approve_all") is True:
-            if pending.method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
-                return JsonResponse(
-                    {"status": "error", "message": "Perguntas precisam ser respondidas."},
-                    status=400,
-                )
-            pending.response = {
-                **_approve_interaction_for_turn(pending.method, pending.params),
-                "__approve_all_for_turn__": True,
-            }
-        elif data.get("cancel") is True:
-            pending.response = _safe_interaction_fallback(pending.method)
-        elif pending.method in {"item/tool/requestUserInput", "tool/requestUserInput"}:
-            raw_answers = data.get("answers") or {}
-            if not isinstance(raw_answers, dict):
-                return JsonResponse({"status": "error", "message": "Respostas inválidas."}, status=400)
-            valid_ids = {
-                str(question.get("id"))
-                for question in (pending.params.get("questions") or [])
-                if isinstance(question, dict) and question.get("id") is not None
-            }
-            answers = {}
-            for question_id in valid_ids:
-                values = raw_answers.get(question_id, [])
-                if isinstance(values, str):
-                    values = [values]
-                if not isinstance(values, list):
-                    values = []
-                cleaned = [
-                    str(value).strip()[:4000]
-                    for value in values[:10]
-                    if str(value).strip()
-                ]
-                if cleaned:
-                    answers[question_id] = {"answers": cleaned}
-            if valid_ids and len(answers) != len(valid_ids):
-                return JsonResponse({"status": "error", "message": "Responda todas as perguntas."}, status=400)
-            pending.response = {"answers": answers}
-        elif pending.method == "item/permissions/requestApproval":
-            approved = bool(data.get("approve"))
-            scope = "session" if data.get("scope") == "session" else "turn"
-            pending.response = {
-                "permissions": (
-                    pending.params.get("permissions") or {}
-                ) if approved else {},
-                "scope": scope,
-            }
-        else:
-            decision = data.get("decision")
-            allowed = {"accept", "acceptForSession", "decline", "cancel"}
-            if decision not in allowed:
-                return JsonResponse({"status": "error", "message": "Decisão inválida."}, status=400)
-            pending.response = {"decision": decision}
+        response, error, status_code = _interaction_response_from_data(
+            pending.method,
+            pending.params,
+            data,
+        )
+        if error:
+            return JsonResponse({"status": "error", "message": error}, status=status_code)
+        pending.response = response
         pending.ready.set()
 
     return JsonResponse({"status": "success"})
@@ -1310,70 +1524,124 @@ def codex_chat_stream(request):
     if request.method != "POST":
         return JsonResponse({"status": "error", "message": "Method not allowed"}, status=405)
 
-    try:
-        data = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"status": "error", "message": "JSON inválido."}, status=400)
-
-    text = (data.get("message") or "").strip()
-    if not text:
-        return JsonResponse({"status": "error", "message": "Mensagem vazia."}, status=400)
-
-    conv, error = _resolve_conversation(data.get("conversation_id"), data.get("agent_slug"), text)
-    if error:
-        return JsonResponse({"status": "error", "message": error}, status=400)
-
-    _recover_orphaned_local_executions(conv.id)
-    active_execution = Execution.objects.filter(
-        conversation=conv,
-        status__in=Execution.ACTIVE_STATUSES,
-    ).first()
-    if active_execution is not None:
-        return JsonResponse({
-            "status": "error",
-            "code": "execution_active",
-            "message": "Já existe uma execução ativa nesta conversa.",
-            "conversation_id": conv.id,
-            "execution": _execution_public_payload(active_execution),
-        }, status=409)
-
-    now = timezone.now()
-    try:
-        execution_record = Execution.objects.create(
-            conversation=conv,
-            status="queued",
-            backend="local",
-            runtime_id=_CODEX_RUNTIME_ID,
-            last_heartbeat_at=now,
+    worker_execution = getattr(request, "_codex_worker_execution", None)
+    if worker_execution is not None:
+        execution_record = Execution.objects.select_related(
+            "conversation__agent"
+        ).get(pk=worker_execution.pk)
+        conv = execution_record.conversation
+        data = dict(execution_record.request_payload or {})
+        text = (data.get("message") or "").strip()
+        if not text:
+            return JsonResponse(
+                {"status": "error", "message": "Execução sem mensagem persistida."},
+                status=400,
+            )
+        state = dict(conv.state or {})
+        old_thread_id = data.get("_old_thread_id") or state.get("codex_thread_id")
+        prompt = data.get("_prepared_prompt") or _prompt_with_history(
+            conv, text, bool(old_thread_id)
         )
-    except IntegrityError:
+        revision_html = (
+            _latest_html_artifact(conv) if _is_html_revision_request(text) else None
+        )
+    else:
+        try:
+            data = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"status": "error", "message": "JSON inválido."}, status=400)
+
+        text = (data.get("message") or "").strip()
+        if not text:
+            return JsonResponse({"status": "error", "message": "Mensagem vazia."}, status=400)
+
+        conv, error = _resolve_conversation(
+            data.get("conversation_id"), data.get("agent_slug"), text
+        )
+        if error:
+            return JsonResponse({"status": "error", "message": error}, status=400)
+
+        _recover_orphaned_local_executions(conv.id)
         active_execution = Execution.objects.filter(
             conversation=conv,
             status__in=Execution.ACTIVE_STATUSES,
         ).first()
-        return JsonResponse({
-            "status": "error",
-            "code": "execution_active",
-            "message": "Já existe uma execução ativa nesta conversa.",
-            "conversation_id": conv.id,
-            "execution": (
-                _execution_public_payload(active_execution) if active_execution else None
-            ),
-        }, status=409)
+        if active_execution is not None:
+            return JsonResponse({
+                "status": "error",
+                "code": "execution_active",
+                "message": "Já existe uma execução ativa nesta conversa.",
+                "conversation_id": conv.id,
+                "execution": _execution_public_payload(active_execution),
+            }, status=409)
 
-    state = dict(conv.state or {})
-    old_thread_id = state.get("codex_thread_id")
-    revision_html = (
-        _latest_html_artifact(conv) if _is_html_revision_request(text) else None
-    )
-    prompt = _prompt_with_history(conv, text, bool(old_thread_id))
-    Message.objects.create(conversation=conv, role="user", content=text)
+        state = dict(conv.state or {})
+        old_thread_id = state.get("codex_thread_id")
+        prompt = _prompt_with_history(conv, text, bool(old_thread_id))
+        persisted_payload = {
+            **data,
+            "conversation_id": conv.id,
+            "message": text,
+            "_old_thread_id": old_thread_id,
+            "_prepared_prompt": prompt,
+        }
+        now = timezone.now()
+        try:
+            with transaction.atomic():
+                execution_record = Execution.objects.create(
+                    conversation=conv,
+                    status="queued",
+                    backend="local-worker",
+                    request_payload=persisted_payload,
+                    last_heartbeat_at=now,
+                    events=[{
+                        "type": "progress",
+                        "stage": "queued",
+                        "icon": "⌛",
+                        "text": "Execução adicionada à fila local",
+                        "sequence": 1,
+                    }],
+                )
+                Message.objects.create(conversation=conv, role="user", content=text)
+        except IntegrityError:
+            active_execution = Execution.objects.filter(
+                conversation=conv,
+                status__in=Execution.ACTIVE_STATUSES,
+            ).first()
+            return JsonResponse({
+                "status": "error",
+                "code": "execution_active",
+                "message": "Já existe uma execução ativa nesta conversa.",
+                "conversation_id": conv.id,
+                "execution": (
+                    _execution_public_payload(active_execution) if active_execution else None
+                ),
+            }, status=409)
+
+        # O request termina imediatamente. A UI usa o id abaixo para acompanhar
+        # os eventos persistidos enquanto o management command executa a tarefa.
+        response = StreamingHttpResponse(
+            iter((": execution queued\n\n",)),
+            content_type="text/event-stream",
+        )
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        response["X-Conversation-Id"] = str(conv.id)
+        response["X-Execution-Id"] = str(execution_record.id)
+        return response
 
     events: "queue.Queue[dict]" = _ExecutionEventQueue(execution_record.id)
     sentinel = object()
     execution = _register_codex_execution(conv.id, str(execution_record.id))
+    worker_finished = threading.Event()
 
     def worker() -> None:
+        if execution_record.backend == "local-worker":
+            threading.Thread(
+                target=_watch_persisted_stop,
+                args=(execution_record, execution, worker_finished),
+                daemon=True,
+            ).start()
         answer_parts: list[str] = []
         approve_all_for_turn = False
         trace_records: dict[str, dict] = {}
@@ -1434,7 +1702,10 @@ def codex_chat_stream(request):
             })
 
         try:
-            Execution.objects.filter(pk=execution_record.id, status="queued").update(
+            Execution.objects.filter(
+                pk=execution_record.id,
+                status__in=("queued", "starting"),
+            ).update(
                 status="starting",
                 started_at=timezone.now(),
                 last_heartbeat_at=timezone.now(),
@@ -1486,7 +1757,13 @@ def codex_chat_stream(request):
                                 "text": "Aprovação automática ativa nesta execução",
                             })
                             return _approve_interaction_for_turn(method, params)
-                        result = _wait_for_interaction(conv, events, method, params)
+                        result = _wait_for_interaction(
+                            conv,
+                            events,
+                            method,
+                            params,
+                            execution_record=execution_record,
+                        )
                         if result.pop("__approve_all_for_turn__", False):
                             approve_all_for_turn = True
                             events.put({
@@ -1697,6 +1974,7 @@ def codex_chat_stream(request):
         finally:
             from django.db import connection
 
+            worker_finished.set()
             _unregister_codex_execution(execution)
             Conversation.objects.filter(pk=conv.id).update(awaiting_human_input=False)
             connection.close()
@@ -1721,3 +1999,39 @@ def codex_chat_stream(request):
     response["X-Conversation-Id"] = str(conv.id)
     response["X-Execution-Id"] = str(execution_record.id)
     return response
+
+
+def run_queued_codex_execution(execution: Execution | str) -> Execution:
+    """Executa uma tarefa persistida consumindo o mesmo pipeline do SSE.
+
+    O management command chama esta função em um processo separado. Consumir
+    o stream internamente mantém compatibilidade com o contrato de eventos sem
+    manter o request original do navegador aberto.
+    """
+    if not isinstance(execution, Execution):
+        execution = Execution.objects.get(pk=execution)
+    if execution.backend != "local-worker":
+        raise ValueError("A execução não pertence ao worker local.")
+    if execution.status in Execution.TERMINAL_STATUSES:
+        return execution
+
+    request = HttpRequest()
+    request.method = "POST"
+    request._body = json.dumps(execution.request_payload or {}).encode("utf-8")
+    request.META["CONTENT_TYPE"] = "application/json"
+    request._codex_worker_execution = execution
+    response = codex_chat_stream(request)
+    if not getattr(response, "streaming", False):
+        try:
+            payload = json.loads(response.content or "{}")
+            message = payload.get("message") or "Falha ao iniciar execução persistida."
+        except (AttributeError, json.JSONDecodeError):
+            message = "Falha ao iniciar execução persistida."
+        raise RuntimeError(message)
+    try:
+        for _chunk in response.streaming_content:
+            pass
+    finally:
+        response.close()
+    execution.refresh_from_db()
+    return execution

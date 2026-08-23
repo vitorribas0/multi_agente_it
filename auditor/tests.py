@@ -2,7 +2,9 @@ import json
 import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
+from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.test import SimpleTestCase, TestCase, override_settings
 
@@ -26,8 +28,9 @@ from .codex_views import (
     _register_codex_execution,
     _recover_orphaned_local_executions,
     _unregister_codex_execution,
+    request_codex_execution_stop,
 )
-from .models import Conversation, Execution, Message
+from .models import Agent, Conversation, Execution, ExecutionInteraction, Message
 from tools.gerar_html import gerar_html
 
 
@@ -302,6 +305,99 @@ class CodexInteractionEndpointTests(TestCase):
 
         with self.assertRaises(IntegrityError), transaction.atomic():
             Execution.objects.create(conversation=conversation, status="queued")
+
+    def test_chat_request_is_persisted_for_the_local_worker(self):
+        agent = Agent.objects.create(name="Atena", slug="atena", is_default=True)
+        conversation = Conversation.objects.create(title="Fila durável", agent=agent)
+
+        response = self.client.post(
+            "/api/codex/chat/stream/",
+            data=json.dumps({
+                "conversation_id": conversation.id,
+                "message": "Analise este conjunto de dados",
+            }),
+            content_type="application/json",
+        )
+        list(response.streaming_content)
+
+        self.assertEqual(response.status_code, 200)
+        execution = Execution.objects.get(pk=response["X-Execution-Id"])
+        self.assertEqual(execution.backend, "local-worker")
+        self.assertEqual(execution.status, "queued")
+        self.assertEqual(
+            execution.request_payload["message"],
+            "Analise este conjunto de dados",
+        )
+        self.assertTrue(execution.request_payload["_prepared_prompt"])
+        self.assertEqual(
+            conversation.messages.filter(role="user").values_list("content", flat=True).get(),
+            "Analise este conjunto de dados",
+        )
+
+    def test_a_queued_worker_execution_can_be_stopped_before_claim(self):
+        conversation = Conversation.objects.create(title="Cancelar fila")
+        execution = Execution.objects.create(
+            conversation=conversation,
+            backend="local-worker",
+            status="queued",
+            request_payload={"message": "Tarefa longa"},
+        )
+
+        stopped = request_codex_execution_stop(execution)
+
+        execution.refresh_from_db()
+        self.assertTrue(stopped)
+        self.assertEqual(execution.status, "stopped")
+        self.assertIsNotNone(execution.stop_requested_at)
+
+    def test_durable_interaction_is_answered_across_processes(self):
+        conversation = Conversation.objects.create(title="Pergunta durável")
+        execution = Execution.objects.create(
+            conversation=conversation,
+            backend="local-worker",
+            status="waiting_user",
+        )
+        requested = {"network": {"enabled": True}}
+        interaction = ExecutionInteraction.objects.create(
+            execution=execution,
+            method="item/permissions/requestApproval",
+            params={"permissions": requested},
+        )
+
+        response = self.client.post(
+            f"/api/codex/interactions/{interaction.token}/respond/",
+            data=json.dumps({"approve": True, "scope": "turn"}),
+            content_type="application/json",
+        )
+
+        interaction.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(interaction.status, "responded")
+        self.assertEqual(
+            interaction.response,
+            {"permissions": requested, "scope": "turn"},
+        )
+
+    def test_worker_claims_a_queued_execution_in_a_separate_command(self):
+        conversation = Conversation.objects.create(title="Worker separado")
+        execution = Execution.objects.create(
+            conversation=conversation,
+            backend="local-worker",
+            status="queued",
+            request_payload={"message": "Processar"},
+        )
+        with TemporaryDirectory() as temporary_dir, override_settings(
+            BASE_DIR=Path(temporary_dir)
+        ), patch(
+            "auditor.management.commands.run_agent_worker.run_queued_codex_execution"
+        ) as runner:
+            call_command("run_agent_worker", "--once", verbosity=0)
+
+        execution.refresh_from_db()
+        runner.assert_called_once()
+        self.assertEqual(execution.status, "starting")
+        self.assertEqual(execution.attempts, 1)
+        self.assertTrue(execution.runtime_id.startswith("local-worker-"))
 
     def test_submits_all_question_answers(self):
         pending = _PendingCodexInteraction(

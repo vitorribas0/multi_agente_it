@@ -4,9 +4,9 @@ Sistema de auditoria assistida por IA: um **backend Django** (motor multi-agente
 tools, integração com o gateway IaraGenAI e Athena) servindo uma API, e um
 **front Angular** (`frontend/`) que consome essa API.
 
-> Para rodar você precisa de **dois processos no ar ao mesmo tempo**: o Django
-> (porta `8000`) e o Angular (porta `4200`). O front faz proxy de `/api/*` para
-> o Django — se o backend estiver desligado, a tela abre mas fica sem dados.
+> Para rodar você precisa de **três processos no ar ao mesmo tempo**: o Django
+> (porta `8000`), o worker da Atena e o Angular (porta `4200`). O front faz proxy
+> de `/api/*` para o Django; o worker continua os turnos mesmo se a tela fechar.
 
 Documentação detalhada do backend em [`documentacao/COMO_RODAR.md`](documentacao/COMO_RODAR.md)
 e da arquitetura em [`documentacao/ARQUITETURA_COMPLETA.md`](documentacao/ARQUITETURA_COMPLETA.md).
@@ -84,9 +84,22 @@ python manage.py createsuperuser
 
 ---
 
-## 4. Front-end (Angular) — terminal 2
+## 4. Worker da Atena — terminal 2
 
-Em **outro terminal** (deixe o Django rodando no primeiro):
+Em outro terminal, com o mesmo ambiente virtual ativado:
+
+```bash
+python manage.py run_agent_worker
+```
+
+O worker consome a fila persistida no banco. Reiniciar o Django ou fechar o
+navegador não encerra o turno que ele já está processando.
+
+---
+
+## 5. Front-end (Angular) — terminal 3
+
+Em **outro terminal** (deixe o Django e o worker rodando):
 
 ```bash
 cd frontend
@@ -101,29 +114,30 @@ Abra **http://localhost:4200** no navegador.
 
 ---
 
-## 5. Verificação rápida
+## 6. Verificação rápida
 
-1. Com os **dois** processos no ar, abra http://localhost:4200 → a tela carrega.
+1. Com os **três** processos no ar, abra http://localhost:4200 → a tela carrega.
 2. Envie uma mensagem simples → o orquestrador responde.
 3. Faça upload de um CSV → vira o "dataset corrente" da conversa.
 4. Abra a Prateleira / Playbooks → devem listar itens vindos da API.
 
 ---
 
-## 6. Problemas comuns
+## 7. Problemas comuns
 
 | Sintoma | Causa provável | Solução |
 |---|---|---|
 | Tela abre mas sem dados; console com `ECONNREFUSED` em `/api/...` | **Django desligado** | subir `python manage.py runserver` no terminal 1 |
+| Mensagem permanece "na fila" | **Worker desligado** | subir `python manage.py run_agent_worker` no terminal 2 |
 | `[vite] http proxy error` | front não achou o backend na porta 8000 | idem acima; conferir `frontend/proxy.conf.json` |
 | `Falha ao iniciar cliente IaraGenAI` | credenciais IARA ausentes/erradas | conferir `IARA_CLIENT_ID/SECRET/ENVIRONMENT` no `.env` |
 | Erro SSL/CA ao consultar Athena | CA bundle não encontrado | garantir `arquivos_suporte/cacert.pem` e as vars `*_CA_BUNDLE` |
-| `database is locked` | escrita concorrente no SQLite | processo único; ver notas de deploy em `COMO_RODAR.md` |
+| `database is locked` recorrente | concorrência acima do adequado para SQLite | reiniciar API/worker; em produção usar PostgreSQL |
 | Mudanças não aparecem no navegador | cache do build | hard reload (`Ctrl+Shift+R`) |
 
 ---
 
-## 7. Estrutura do projeto
+## 8. Estrutura do projeto
 
 ```
 auditor/            app Django (models, views, API, motor multi-agente)

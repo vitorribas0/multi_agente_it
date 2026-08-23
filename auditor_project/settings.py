@@ -93,6 +93,9 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
+        # API e worker são processos separados; aguardar uma escrita curta é
+        # mais seguro do que falhar imediatamente com "database is locked".
+        "OPTIONS": {"timeout": 30},
     }
 }
 
