@@ -5718,3 +5718,10 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .glass-wave { animation: none !important; }
 }
+
+/* O blur de vidro cria uma área de recorte. Ao recolher a sidebar, libera
+   somente o overflow do contêiner vazio para o botão de retorno continuar
+   visível e clicável fora da largura de 0px. */
+.sidebar.collapsed {
+  overflow: visible;
+}
