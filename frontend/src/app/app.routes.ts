@@ -5,7 +5,7 @@ import { PlaybooksPageComponent } from './pages/playbooks/playbooks-page.compone
 
 export const routes: Routes = [
   // Chat (núcleo: mensagem + streaming SSE + histórico + markdown) e
-  // Configurações migrados. O manual entra na próxima fase.
+  // Configurações migrados.
   { path: 'chat', component: ChatPageComponent },
   { path: 'playbooks', component: PlaybooksPageComponent },
   { path: 'settings', component: SettingsPageComponent },

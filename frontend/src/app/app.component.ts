@@ -5,8 +5,7 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { HistoryListComponent } from './shared/history-list.component';
 
 // Shell da aplicação: espelha o layout do base.html (sidebar + main).
-// A sidebar reúne navegação (Chat/Manual/Configurações) + histórico de
-// conversas (app-history-list). O Manual ainda é placeholder até ser migrado.
+// A sidebar reúne a navegação principal e o histórico de conversas.
 @Component({
   selector: 'app-root',
   standalone: true,
