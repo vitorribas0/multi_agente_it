@@ -122,7 +122,18 @@
   <div class="messages-area" #messagesArea>
     <!-- Estado de boas-vindas (some ao ter mensagens) -->
     <div class="welcome-state" *ngIf="!hasMessages">
-      <div class="welcome-icon">{{ activePlaybook ? activePlaybook.icon : '🛡️' }}</div>
+      <div class="welcome-icon" [class.playbook-icon]="activePlaybook">
+        <ng-container *ngIf="activePlaybook; else atenaGlassOrb">{{ activePlaybook.icon }}</ng-container>
+        <ng-template #atenaGlassOrb>
+          <div class="glass-orb" aria-hidden="true">
+            <span class="orb-core"></span>
+            <span class="orb-ring ring-one"></span>
+            <span class="orb-ring ring-two"></span>
+            <span class="orb-ring ring-three"></span>
+            <span class="orb-glint"></span>
+          </div>
+        </ng-template>
+      </div>
       <h1 class="welcome-title">Como posso ajudar?</h1>
       <p class="welcome-sub" *ngIf="!activePlaybook">
         <ng-container *ngIf="engine === 'codex'">Você está conversando com a Atena.<br>Área protegida e habilidades de auditoria carregadas.</ng-container>
