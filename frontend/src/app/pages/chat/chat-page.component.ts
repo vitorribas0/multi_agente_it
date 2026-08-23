@@ -27,6 +27,8 @@ import {
   CodexPlanEvent,
   CodexPlanItem,
   DocumentAttachment,
+  ExecutionEvent,
+  ExecutionSnapshot,
   ExportAttachment,
   ChatProgressEvent,
   KnowledgeBase,
@@ -190,6 +192,9 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private controller: AbortController | null = null;
   private activeConversationId: number | null = null;
+  private activeExecutionId: string | null = null;
+  private executionEventCursor = 0;
+  private executionPollTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldScroll = false;
   private routeSub?: Subscription;
 
@@ -232,7 +237,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   ngOnDestroy(): void {
-    this.cancelPendingInteraction();
+    this.stopExecutionPolling();
     this.routeSub?.unsubscribe();
     document.body.classList.remove('html-preview-open', 'html-preview-full');
     this.cleanupLivePanel();
@@ -240,6 +245,12 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   // Zera a tela para uma conversa nova (equivale a abrir /chat sem ?c).
   private resetChat(): void {
+    this.stopExecutionPolling();
+    this.activeExecutionId = null;
+    this.activeConversationId = null;
+    this.executionEventCursor = 0;
+    this.isLoading = false;
+    this.stopRequested = false;
     this.conversationId = null;
     this.messages = [];
     this.awaitingHuman = false;
@@ -295,7 +306,8 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  private loadConversation(id: number): void {
+  private loadConversation(id: number, terminalError = ''): void {
+    this.stopExecutionPolling();
     this.chat.getConversation(id).subscribe({
       next: (data) => {
         this.conversationId = data.id;
@@ -306,10 +318,162 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.pendingPlaybookId = undefined;
         this.applyPlaybookBinding(data.playbook_id ?? null, data.playbook_name ?? null);
         this.loadConversationModals(data.id);
+        if (terminalError) {
+          this.messages.push({
+            role: 'assistant',
+            content: `❌ Execução encerrada: ${terminalError}`,
+            tool_calls: [],
+          });
+        }
+        if (data.active_execution) {
+          this.recoverExecution(data.active_execution);
+        } else if (!this.controller) {
+          this.activeExecutionId = null;
+          this.activeConversationId = null;
+          this.executionEventCursor = 0;
+          this.isLoading = false;
+          this.typing = false;
+          this.stopRequested = false;
+          this.pendingInteraction = null;
+        }
         this.scrollSoon();
       },
       error: () => {},
     });
+  }
+
+  private executionIsActive(execution: ExecutionSnapshot): boolean {
+    return ['queued', 'starting', 'running', 'waiting_user', 'stopping'].includes(execution.status);
+  }
+
+  private recoverExecution(execution: ExecutionSnapshot): void {
+    this.activeExecutionId = execution.id;
+    this.activeConversationId = execution.conversation_id;
+    this.executionEventCursor = 0;
+    this.isLoading = this.executionIsActive(execution);
+    this.typing = this.isLoading;
+    this.stopRequested = execution.status === 'stopping';
+    this.progress = [];
+    this.resetLiveTree();
+    this.pendingInteraction = null;
+    this.interactionAnswers = {};
+    this.interactionError = '';
+    this.livePlan = execution.plan || [];
+    this.livePlanExplanation = execution.plan_explanation || '';
+    this.consumeExecutionEvents(execution.events || []);
+    if (this.executionIsActive(execution)) {
+      this.scheduleExecutionPoll(300);
+    } else {
+      this.finishRecoveredExecution(execution);
+    }
+  }
+
+  private consumeExecutionEvents(events: ExecutionEvent[]): void {
+    const hasSequence = events.some((event) => Number(event['sequence'] || 0) > 0);
+    const pending = hasSequence
+      ? events.filter((event) => Number(event['sequence'] || 0) > this.executionEventCursor)
+      : events.slice(this.executionEventCursor);
+    if (hasSequence) {
+      this.executionEventCursor = events.reduce(
+        (latest, event) => Math.max(latest, Number(event['sequence'] || 0)),
+        this.executionEventCursor,
+      );
+    } else {
+      this.executionEventCursor = events.length;
+    }
+    for (const event of pending) {
+      if (event.type === 'progress') {
+        const progressEvent = event as ChatProgressEvent;
+        this.pushProgress(progressEvent);
+        this.ingestLiveEvent(progressEvent);
+      } else if (event.type === 'plan') {
+        this.livePlan = event['plan'] || [];
+        this.livePlanExplanation = event['explanation'] || '';
+      } else if (event.type === 'interaction' && event['interaction']) {
+        this.pendingInteraction = event['interaction'] as CodexInteraction;
+        this.interactionAnswers = {};
+        this.interactionError = '';
+        this.awaitingHuman = true;
+      } else if (event.type === 'interaction_resolved') {
+        if (!event['token'] || this.pendingInteraction?.token === event['token']) {
+          this.pendingInteraction = null;
+          this.awaitingHuman = false;
+        }
+      }
+    }
+    this.scrollSoon();
+  }
+
+  private rememberLiveEventSequence(event: { sequence?: number }): void {
+    const sequence = Number(event.sequence || 0);
+    if (sequence > this.executionEventCursor) this.executionEventCursor = sequence;
+  }
+
+  private resumePersistentExecution(): void {
+    this.controller = null;
+    this.typing = true;
+    this.pushProgress({
+      stage: 'thinking',
+      icon: '↻',
+      text: 'Conexão restabelecida pelo acompanhamento persistente',
+    });
+    this.scheduleExecutionPoll(300);
+    this.scrollSoon();
+  }
+
+  private scheduleExecutionPoll(delayMs = 1000): void {
+    this.stopExecutionPolling();
+    if (!this.activeExecutionId) return;
+    this.executionPollTimer = setTimeout(() => this.pollExecution(), delayMs);
+  }
+
+  private pollExecution(): void {
+    const executionId = this.activeExecutionId;
+    if (!executionId) return;
+    this.chat.getExecution(executionId).subscribe({
+      next: ({ execution }) => {
+        if (this.activeExecutionId !== executionId) return;
+        this.consumeExecutionEvents(execution.events || []);
+        this.livePlan = execution.plan || this.livePlan;
+        this.livePlanExplanation = execution.plan_explanation || this.livePlanExplanation;
+        this.awaitingHuman = execution.status === 'waiting_user';
+        this.stopRequested = execution.status === 'stopping';
+        if (this.executionIsActive(execution)) {
+          this.isLoading = true;
+          this.typing = true;
+          this.scheduleExecutionPoll();
+        } else {
+          this.finishRecoveredExecution(execution);
+        }
+      },
+      error: () => this.scheduleExecutionPoll(2000),
+    });
+  }
+
+  private finishRecoveredExecution(execution: ExecutionSnapshot): void {
+    const conversationId = execution.conversation_id;
+    this.stopExecutionPolling();
+    this.activeExecutionId = null;
+    this.activeConversationId = null;
+    this.executionEventCursor = 0;
+    this.isLoading = false;
+    this.typing = false;
+    this.stopRequested = false;
+    this.pendingInteraction = null;
+    this.awaitingHuman = false;
+    this.finalizeLiveTree();
+    this.bus.notifyChanged();
+    this.loadConversation(
+      conversationId,
+      execution.status === 'failed' ? (execution.error || 'falha sem detalhe') : '',
+    );
+  }
+
+  private stopExecutionPolling(): void {
+    if (this.executionPollTimer) {
+      clearTimeout(this.executionPollTimer);
+      this.executionPollTimer = null;
+    }
   }
 
   // Reflete o playbook vinculado à conversa: badge + sugestões. Busca o detalhe
@@ -368,8 +532,11 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!text || this.isLoading) return;
 
     this.isLoading = true;
+    this.stopExecutionPolling();
     this.controller = new AbortController();
     this.activeConversationId = this.conversationId;
+    this.activeExecutionId = null;
+    this.executionEventCursor = 0;
     this.stopRequested = false;
     this.input = '';
 
@@ -399,11 +566,19 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
         },
         {
           signal: this.controller.signal,
-          onStarted: (conversationId) => {
+          onStarted: (conversationId, executionId) => {
+            const wasNew = !this.conversationId;
             this.activeConversationId = conversationId;
+            this.activeExecutionId = executionId;
+            if (wasNew) {
+              this.conversationId = conversationId;
+              this.syncUrl(conversationId);
+              this.bus.notifyChanged();
+            }
             if (this.stopRequested) void this.stopActiveExecution();
           },
           onProgress: (evt) => {
+            this.rememberLiveEventSequence(evt);
             this.pushProgress(evt);
             this.ingestLiveEvent(evt);
           },
@@ -414,13 +589,26 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
             this.awaitingHuman = true;
             this.scrollSoon();
           },
+          onInteractionResolved: (evt) => {
+            this.rememberLiveEventSequence(evt);
+            if (!evt.token || this.pendingInteraction?.token === evt.token) {
+              this.pendingInteraction = null;
+              this.awaitingHuman = false;
+            }
+          },
           onPlan: (evt: CodexPlanEvent) => {
+            this.rememberLiveEventSequence(evt);
             this.livePlan = evt.plan || [];
             this.livePlanExplanation = evt.explanation || '';
             this.scrollSoon();
           },
         },
       );
+
+      if ((!data || data.status !== 'success') && this.activeExecutionId && this.activeConversationId) {
+        this.resumePersistentExecution();
+        return;
+      }
 
       this.typing = false;
       this.pendingInteraction = null;
@@ -453,10 +641,14 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.messages.push({ role: 'assistant', content: '❌ Erro: ' + msg, tool_calls: [] });
       }
     } catch (err: any) {
-      this.typing = false;
       if (err?.name === 'AbortError') {
+        this.typing = false;
         this.messages.push({ role: 'assistant', content: '⏹️ Geração interrompida.', tool_calls: [] });
+      } else if (this.activeExecutionId && this.activeConversationId) {
+        this.resumePersistentExecution();
+        return;
       } else {
+        this.typing = false;
         this.messages.push({
           role: 'assistant',
           content: '❌ Falha na conexão: ' + (err?.message || err),
@@ -468,6 +660,8 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.isLoading = false;
     this.controller = null;
     this.activeConversationId = null;
+    this.activeExecutionId = null;
+    this.executionEventCursor = 0;
     this.stopRequested = false;
     this.scrollSoon();
   }
@@ -522,20 +716,24 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   stop(): void {
-    if (!this.controller || this.stopRequested) return;
+    if ((!this.controller && !this.activeExecutionId) || this.stopRequested) return;
     this.stopRequested = true;
     this.cancelPendingInteraction();
-    if (this.activeConversationId) void this.stopActiveExecution();
+    if (this.activeExecutionId || this.activeConversationId) void this.stopActiveExecution();
   }
 
   private async stopActiveExecution(): Promise<void> {
     const controller = this.controller;
     const conversationId = this.activeConversationId;
-    if (!controller || !conversationId) return;
+    const executionId = this.activeExecutionId;
+    if (!executionId && !conversationId) return;
     try {
-      const result = await this.chat.stopConversation(conversationId);
+      const result = executionId
+        ? await this.chat.stopExecution(executionId)
+        : await this.chat.stopConversation(conversationId!);
       if (result.stopped && this.controller === controller) {
-        controller.abort();
+        controller?.abort();
+        if (!controller) this.scheduleExecutionPoll(200);
       } else if (!result.stopped) {
         this.stopRequested = false;
       }

@@ -3,10 +3,13 @@ import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from django.db import IntegrityError, transaction
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from .codex_app_server import CodexAppServer
 from .codex_views import (
+    _CODEX_RUNTIME_ID,
+    _ExecutionEventQueue,
     _PENDING_INTERACTIONS,
     _PENDING_INTERACTIONS_LOCK,
     _PendingCodexInteraction,
@@ -21,9 +24,10 @@ from .codex_views import (
     _split_html_response,
     _strip_codex_file_citations,
     _register_codex_execution,
+    _recover_orphaned_local_executions,
     _unregister_codex_execution,
 )
-from .models import Conversation, Message
+from .models import Conversation, Execution, Message
 from tools.gerar_html import gerar_html
 
 
@@ -132,6 +136,7 @@ class CodexAppServerEventTests(SimpleTestCase):
     def test_interrupt_uses_the_active_thread_and_turn_ids(self):
         client = self._client()
         sent = []
+        started_turns = []
         client._send = lambda payload: sent.append(payload)
 
         def messages():
@@ -147,10 +152,15 @@ class CodexAppServerEventTests(SimpleTestCase):
 
         client._messages = messages
 
-        events = list(client.turn("thread-7", "analise longa"))
+        events = list(client.turn(
+            "thread-7",
+            "analise longa",
+            turn_started_handler=started_turns.append,
+        ))
 
         self.assertEqual(sent[1]["method"], "turn/interrupt")
         self.assertEqual(sent[1]["params"], {"threadId": "thread-7", "turnId": "turn-9"})
+        self.assertEqual(started_turns, ["turn-9"])
         self.assertEqual(events[-1]["status"], "interrupted")
 
 
@@ -178,7 +188,15 @@ class CodexInteractionEndpointTests(TestCase):
 
     def test_stop_endpoint_interrupts_an_active_codex_execution(self):
         conversation = Conversation.objects.create(title="Execução longa")
-        execution = _register_codex_execution(conversation.id)
+        execution_record = Execution.objects.create(
+            conversation=conversation,
+            status="running",
+            runtime_id=_CODEX_RUNTIME_ID,
+        )
+        execution = _register_codex_execution(
+            conversation.id,
+            str(execution_record.id),
+        )
 
         class FakeClient:
             interrupted = False
@@ -203,8 +221,87 @@ class CodexInteractionEndpointTests(TestCase):
             self.assertTrue(payload["codex_stopped"])
             self.assertTrue(execution.stop_event.is_set())
             self.assertTrue(fake_client.interrupted)
+            execution_record.refresh_from_db()
+            self.assertEqual(execution_record.status, "stopping")
         finally:
             _unregister_codex_execution(execution)
+
+    def test_execution_events_survive_the_stream_connection(self):
+        conversation = Conversation.objects.create(title="Persistência")
+        execution = Execution.objects.create(
+            conversation=conversation,
+            status="starting",
+            runtime_id=_CODEX_RUNTIME_ID,
+        )
+        events = _ExecutionEventQueue(execution.id)
+
+        events.put({"type": "progress", "stage": "thinking", "text": "Analisando"})
+        events.put({
+            "type": "plan",
+            "explanation": "Plano",
+            "plan": [{"step": "Ler dados", "status": "inProgress"}],
+        })
+
+        execution.refresh_from_db()
+        self.assertEqual(execution.status, "running")
+        self.assertEqual(len(execution.events), 2)
+        self.assertEqual([event["sequence"] for event in execution.events], [1, 2])
+        self.assertEqual(execution.plan[0]["step"], "Ler dados")
+
+    def test_late_progress_does_not_reactivate_a_stopping_execution(self):
+        conversation = Conversation.objects.create(title="Interrompendo")
+        execution = Execution.objects.create(
+            conversation=conversation,
+            status="stopping",
+            runtime_id=_CODEX_RUNTIME_ID,
+        )
+
+        _ExecutionEventQueue(execution.id).put({
+            "type": "progress",
+            "stage": "thinking",
+            "text": "Evento atrasado",
+        })
+
+        execution.refresh_from_db()
+        self.assertEqual(execution.status, "stopping")
+        self.assertEqual(execution.events[0]["text"], "Evento atrasado")
+
+    def test_execution_status_marks_an_old_local_runtime_as_failed(self):
+        conversation = Conversation.objects.create(title="Órfã")
+        execution = Execution.objects.create(
+            conversation=conversation,
+            status="running",
+            runtime_id="processo-anterior",
+        )
+
+        changed = _recover_orphaned_local_executions(conversation.id)
+
+        execution.refresh_from_db()
+        self.assertEqual(changed, 1)
+        self.assertEqual(execution.status, "failed")
+        self.assertIn("reiniciado", execution.error)
+
+    def test_conversation_detail_exposes_the_active_execution(self):
+        conversation = Conversation.objects.create(title="Recuperável")
+        execution = Execution.objects.create(
+            conversation=conversation,
+            status="waiting_user",
+            runtime_id=_CODEX_RUNTIME_ID,
+            events=[{"type": "interaction", "interaction": {"token": "abc"}}],
+        )
+
+        response = self.client.get(f"/api/conversations/{conversation.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["active_execution"]["id"], str(execution.id))
+        self.assertEqual(response.json()["active_execution"]["status"], "waiting_user")
+
+    def test_database_rejects_two_active_executions_for_the_same_chat(self):
+        conversation = Conversation.objects.create(title="Sem duplicidade")
+        Execution.objects.create(conversation=conversation, status="running")
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Execution.objects.create(conversation=conversation, status="queued")
 
     def test_submits_all_question_answers(self):
         pending = _PendingCodexInteraction(

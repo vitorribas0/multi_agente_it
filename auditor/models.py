@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 
 
@@ -246,6 +248,67 @@ class Conversation(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class Execution(models.Model):
+    """Ciclo persistente de uma execução do agente em uma conversa.
+
+    O registro independe do transporte SSE e é a base para recuperar progresso,
+    perguntas e cancelamento depois de recarregar a interface. O backend
+    ``local`` usa uma thread por enquanto; futuros backends podem guardar ARN
+    de task ECS e continuar usando o mesmo contrato.
+    """
+
+    STATUS_CHOICES = (
+        ("queued", "Na fila"),
+        ("starting", "Iniciando"),
+        ("running", "Executando"),
+        ("waiting_user", "Aguardando usuário"),
+        ("stopping", "Interrompendo"),
+        ("completed", "Concluída"),
+        ("stopped", "Interrompida"),
+        ("failed", "Falhou"),
+    )
+    ACTIVE_STATUSES = ("queued", "starting", "running", "waiting_user", "stopping")
+    TERMINAL_STATUSES = ("completed", "stopped", "failed")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    conversation = models.ForeignKey(
+        Conversation,
+        related_name="executions",
+        on_delete=models.CASCADE,
+    )
+    engine = models.CharField(max_length=40, default="codex-app-server")
+    backend = models.CharField(max_length=24, default="local")
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES, default="queued", db_index=True)
+    runtime_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    thread_id = models.CharField(max_length=160, blank=True, default="")
+    turn_id = models.CharField(max_length=160, blank=True, default="")
+    events = models.JSONField(default=list, blank=True)
+    plan = models.JSONField(default=list, blank=True)
+    plan_explanation = models.TextField(blank=True, default="")
+    error = models.TextField(blank=True, default="")
+    stop_requested_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    last_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["conversation"],
+                condition=models.Q(
+                    status__in=["queued", "starting", "running", "waiting_user", "stopping"]
+                ),
+                name="unique_active_execution_per_conversation",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Execution({self.id}, {self.status}, conv={self.conversation_id})"
 
 
 class SessionAgent(models.Model):

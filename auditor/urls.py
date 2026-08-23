@@ -18,6 +18,16 @@ urlpatterns = [
     path("api/codex/skills/<slug:slug>/", codex_views.codex_skill_delete, name="codex_skill_delete"),
     path("api/codex/chat/stream/", codex_views.codex_chat_stream, name="codex_chat_stream"),
     path(
+        "api/codex/executions/<uuid:execution_id>/",
+        codex_views.codex_execution_detail,
+        name="codex_execution_detail",
+    ),
+    path(
+        "api/codex/executions/<uuid:execution_id>/stop/",
+        codex_views.codex_execution_stop,
+        name="codex_execution_stop",
+    ),
+    path(
         "api/codex/interactions/<str:token>/respond/",
         codex_views.codex_interaction_respond,
         name="codex_interaction_respond",

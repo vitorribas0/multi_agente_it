@@ -123,7 +123,38 @@ export interface ConversationDetail {
   has_session_agent: boolean;
   playbook_id: number | null;
   playbook_name: string | null;
+  active_execution?: ExecutionSnapshot | null;
   messages: ChatMessage[];
+}
+
+export type ExecutionStatus =
+  | 'queued'
+  | 'starting'
+  | 'running'
+  | 'waiting_user'
+  | 'stopping'
+  | 'completed'
+  | 'stopped'
+  | 'failed';
+
+export interface ExecutionEvent {
+  type: 'progress' | 'plan' | 'interaction' | 'done' | 'error' | string;
+  [key: string]: any;
+}
+
+export interface ExecutionSnapshot {
+  id: string;
+  conversation_id: number;
+  engine: string;
+  backend: string;
+  status: ExecutionStatus;
+  events: ExecutionEvent[];
+  plan: CodexPlanItem[];
+  plan_explanation?: string;
+  error?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  last_heartbeat_at?: string | null;
 }
 
 // Payload do evento SSE 'done' (chat_stream).
@@ -145,6 +176,7 @@ export interface ChatDonePayload {
 // backend os envia em stage 'tool' (início) e 'tool_result' (término).
 export interface ChatProgressEvent {
   type: 'progress';
+  sequence?: number;
   stage?: 'thinking' | 'massiva' | 'tool' | 'tool_result' | string;
   icon?: string;
   text?: string;
@@ -169,6 +201,7 @@ export interface CodexPlanItem {
 
 export interface CodexPlanEvent {
   type: 'plan';
+  sequence?: number;
   explanation?: string;
   plan: CodexPlanItem[];
 }

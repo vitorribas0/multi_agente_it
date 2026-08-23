@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .ai_service import run_agent, request_stop, register_stop, clear_stop, MODEL_OPTIONS
 from .models import (
-    Conversation, Message, ToolCall, Agent, SessionAgent, AppSettings,
+    Conversation, Execution, Message, ToolCall, Agent, SessionAgent, AppSettings,
     Knowledge, Playbook,
 )
 from tools import all_tools
@@ -111,6 +111,28 @@ def _message_payload(m: Message) -> dict:
     }
 
 
+def _execution_payload(execution: Execution | None) -> dict | None:
+    if execution is None:
+        return None
+    return {
+        "id": str(execution.id),
+        "conversation_id": execution.conversation_id,
+        "status": execution.status,
+        "engine": execution.engine,
+        "backend": execution.backend,
+        "events": execution.events or [],
+        "plan": execution.plan or [],
+        "plan_explanation": execution.plan_explanation,
+        "error": execution.error,
+        "started_at": execution.started_at.isoformat() if execution.started_at else None,
+        "finished_at": execution.finished_at.isoformat() if execution.finished_at else None,
+        "last_heartbeat_at": (
+            execution.last_heartbeat_at.isoformat()
+            if execution.last_heartbeat_at else None
+        ),
+    }
+
+
 def _artifacts_ref_block(attachments) -> str:
     """Resume os artefatos de UMA mensagem como texto para reinjetar no histórico.
 
@@ -190,6 +212,9 @@ def conversation_detail(request, conv_id):
         id=conv_id,
     )
     messages = conv.messages.prefetch_related("tool_calls")
+    active_execution = conv.executions.filter(
+        status__in=Execution.ACTIVE_STATUSES,
+    ).first()
     return JsonResponse({
         "id": conv.id,
         "title": conv.title,
@@ -198,6 +223,7 @@ def conversation_detail(request, conv_id):
         "has_session_agent": hasattr(conv, "session_agent"),
         "playbook_id": conv.playbook_id,
         "playbook_name": conv.playbook.name if conv.playbook_id else None,
+        "active_execution": _execution_payload(active_execution),
         "messages": [_message_payload(m) for m in messages],
     })
 
@@ -731,9 +757,16 @@ def chat_stop(request, conv_id):
     legacy_stopped = request_stop(conv_id)
     # Import local evita ciclo de módulos: codex_views reutiliza helpers desta
     # view, enquanto este endpoint unifica o botão Parar dos dois motores.
-    from .codex_views import request_codex_stop
+    from .codex_views import request_codex_execution_stop
 
-    codex_stopped = request_codex_stop(conv_id)
+    active_execution = Execution.objects.filter(
+        conversation_id=conv_id,
+        status__in=Execution.ACTIVE_STATUSES,
+    ).first()
+    codex_stopped = (
+        request_codex_execution_stop(active_execution)
+        if active_execution is not None else False
+    )
     return JsonResponse({
         "status": "success",
         "stopped": legacy_stopped or codex_stopped,

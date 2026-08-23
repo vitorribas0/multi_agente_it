@@ -162,14 +162,16 @@ class CodexAppServer:
                     "Codex App Server encerrou antes de receber a solicitação."
                 ) from exc
 
-    def _remember_active_turn(self, thread_id: str, turn: dict) -> None:
+    def _remember_active_turn(self, thread_id: str, turn: dict) -> str | None:
         turn_id = turn.get("id") if isinstance(turn, dict) else None
         if not turn_id:
-            return
+            return None
+        turn_id = str(turn_id)
         with self._turn_lock:
             self._active_thread_id = thread_id
-            self._active_turn_id = str(turn_id)
+            self._active_turn_id = turn_id
         self._send_interrupt_if_ready()
+        return turn_id
 
     def _send_interrupt_if_ready(self) -> bool:
         with self._turn_lock:
@@ -286,6 +288,7 @@ class CodexAppServer:
         thread_id: str,
         prompt: str,
         server_request_handler: Callable[[str, dict], dict] | None = None,
+        turn_started_handler: Callable[[str], None] | None = None,
     ) -> Iterator[dict]:
         with self._turn_lock:
             self._active_thread_id = thread_id
@@ -315,12 +318,20 @@ class CodexAppServer:
                         error = message["error"]
                         raise CodexAppServerError(error.get("message", str(error)))
                     result = message.get("result") or {}
-                    self._remember_active_turn(thread_id, result.get("turn") or {})
+                    turn_id = self._remember_active_turn(
+                        thread_id, result.get("turn") or {}
+                    )
+                    if turn_id and turn_started_handler is not None:
+                        turn_started_handler(turn_id)
 
                 method = message.get("method")
                 params = message.get("params") or {}
                 if method == "turn/started":
-                    self._remember_active_turn(thread_id, params.get("turn") or {})
+                    turn_id = self._remember_active_turn(
+                        thread_id, params.get("turn") or {}
+                    )
+                    if turn_id and turn_started_handler is not None:
+                        turn_started_handler(turn_id)
                 elif message.get("id") is not None and method in _SERVER_REQUEST_METHODS:
                     if server_request_handler is None:
                         if method == "item/permissions/requestApproval":

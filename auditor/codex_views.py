@@ -15,12 +15,14 @@ from pathlib import Path
 from uuid import uuid4
 
 from django.conf import settings
+from django.db import IntegrityError
 from django.http import JsonResponse, StreamingHttpResponse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
 
 from .codex_app_server import CodexAppServer, CodexAppServerError
-from .models import Conversation, Message, ToolCall
+from .models import Conversation, Execution, Message, ToolCall
 from .views import _message_payload, _resolve_conversation
 from tools.gerar_html import gerar_html
 
@@ -98,11 +100,14 @@ _PENDING_INTERACTIONS: dict[str, _PendingCodexInteraction] = {}
 _PENDING_INTERACTIONS_LOCK = threading.Lock()
 _INTERACTION_TIMEOUT_SECONDS = 10 * 60
 _CODEX_FORCE_STOP_SECONDS = 2.0
+_EXECUTION_EVENT_LIMIT = 250
+_CODEX_RUNTIME_ID = uuid4().hex
 
 
 @dataclass
 class _ActiveCodexExecution:
     conversation_id: int
+    execution_id: str
     stop_event: threading.Event = field(default_factory=threading.Event)
     client: CodexAppServer | None = None
     force_timer: threading.Timer | None = None
@@ -117,8 +122,8 @@ class _CodexExecutionStopped(RuntimeError):
     pass
 
 
-def _register_codex_execution(conversation_id: int) -> _ActiveCodexExecution:
-    execution = _ActiveCodexExecution(conversation_id)
+def _register_codex_execution(conversation_id: int, execution_id: str) -> _ActiveCodexExecution:
+    execution = _ActiveCodexExecution(conversation_id, execution_id)
     with _ACTIVE_CODEX_EXECUTIONS_LOCK:
         previous = _ACTIVE_CODEX_EXECUTIONS.get(conversation_id)
         _ACTIVE_CODEX_EXECUTIONS[conversation_id] = execution
@@ -164,11 +169,11 @@ def _force_stop_codex_execution(execution: _ActiveCodexExecution) -> None:
         client.close()
 
 
-def request_codex_stop(conversation_id: int) -> bool:
+def request_codex_stop(conversation_id: int, execution_id: str | None = None) -> bool:
     """Interrompe o turno Codex ativo e arma um encerramento de segurança."""
     with _ACTIVE_CODEX_EXECUTIONS_LOCK:
         execution = _ACTIVE_CODEX_EXECUTIONS.get(conversation_id)
-    if execution is None:
+    if execution is None or (execution_id and execution.execution_id != execution_id):
         return False
 
     execution.stop_event.set()
@@ -193,6 +198,146 @@ def request_codex_stop(conversation_id: int) -> bool:
                 execution.force_timer = force_timer
                 force_timer.start()
     return True
+
+
+def _execution_public_payload(execution: Execution) -> dict:
+    return {
+        "id": str(execution.id),
+        "conversation_id": execution.conversation_id,
+        "engine": execution.engine,
+        "backend": execution.backend,
+        "status": execution.status,
+        "events": execution.events or [],
+        "plan": execution.plan or [],
+        "plan_explanation": execution.plan_explanation,
+        "error": execution.error,
+        "stop_requested_at": (
+            execution.stop_requested_at.isoformat() if execution.stop_requested_at else None
+        ),
+        "started_at": execution.started_at.isoformat() if execution.started_at else None,
+        "finished_at": execution.finished_at.isoformat() if execution.finished_at else None,
+        "last_heartbeat_at": (
+            execution.last_heartbeat_at.isoformat() if execution.last_heartbeat_at else None
+        ),
+        "created_at": execution.created_at.isoformat(),
+        "updated_at": execution.updated_at.isoformat(),
+    }
+
+
+def _recover_orphaned_local_executions(conversation_id: int | None = None) -> int:
+    """Fecha execuções locais que pertencem a outro processo Django.
+
+    Em produção, backends ECS/SQS terão sua própria estratégia de reconciliação;
+    esta regra é deliberadamente restrita ao backend local.
+    """
+    query = Execution.objects.filter(
+        backend="local",
+        status__in=Execution.ACTIVE_STATUSES,
+    ).exclude(runtime_id=_CODEX_RUNTIME_ID)
+    if conversation_id is not None:
+        query = query.filter(conversation_id=conversation_id)
+    now = timezone.now()
+    return query.update(
+        status="failed",
+        error="Execução local encerrada porque o processo do servidor foi reiniciado.",
+        finished_at=now,
+        last_heartbeat_at=now,
+    )
+
+
+def _persist_execution_event(execution_id, event: dict) -> int | None:
+    """Persiste somente o contrato público necessário para reconectar a UI."""
+    try:
+        execution = Execution.objects.get(pk=execution_id)
+        event_type = event.get("type")
+        stored_event: dict | None = None
+        now = timezone.now()
+        updates: dict = {"last_heartbeat_at": now, "updated_at": now}
+        live_status: str | None = None
+        if event_type in {"progress", "plan", "interaction", "interaction_resolved"}:
+            stored_event = dict(event)
+        elif event_type == "done":
+            payload = event.get("payload") or {}
+            stopped = bool(payload.get("stopped"))
+            stored_event = {"type": "done", "stopped": stopped}
+            updates.update({
+                "status": "stopped" if stopped else "completed",
+                "finished_at": timezone.now(),
+                "error": "",
+            })
+        elif event_type == "error":
+            message = _sanitize_trace_text(event.get("message"), 4000)
+            stored_event = {"type": "error", "message": message}
+            updates.update({
+                "status": "failed",
+                "finished_at": timezone.now(),
+                "error": message,
+            })
+
+        if event_type == "plan":
+            updates["plan"] = event.get("plan") or []
+            updates["plan_explanation"] = _sanitize_trace_text(
+                event.get("explanation"), 1200
+            )
+        elif event_type == "interaction":
+            live_status = "waiting_user"
+        elif event_type == "progress":
+            live_status = "running"
+
+        if stored_event is not None:
+            previous_events = execution.events or []
+            try:
+                previous_event = previous_events[-1] if previous_events else {}
+                previous_sequence = int((previous_event or {}).get("sequence", 0))
+            except (AttributeError, TypeError, ValueError):
+                previous_sequence = 0
+            stored_event["sequence"] = previous_sequence + 1
+            updates["events"] = [*(execution.events or []), stored_event][-_EXECUTION_EVENT_LIMIT:]
+        Execution.objects.filter(pk=execution_id).update(**updates)
+        if live_status is not None:
+            # O pedido de parada pode chegar entre a leitura e a gravação do
+            # evento. A atualização condicional garante que progresso tardio
+            # nunca reative uma execução que já está sendo interrompida.
+            Execution.objects.filter(
+                pk=execution_id,
+                status__in=("queued", "starting", "running", "waiting_user"),
+            ).update(status=live_status, updated_at=now)
+        return stored_event.get("sequence") if stored_event is not None else None
+    except Exception:
+        # Falha de telemetria não pode derrubar o turno do agente.
+        return None
+
+
+class _ExecutionEventQueue(queue.Queue):
+    def __init__(self, execution_id):
+        super().__init__()
+        self.execution_id = execution_id
+
+    def put(self, item, block=True, timeout=None):
+        if isinstance(item, dict) and item.get("type"):
+            sequence = _persist_execution_event(self.execution_id, item)
+            if sequence is not None:
+                item = {**item, "sequence": sequence}
+        return super().put(item, block=block, timeout=timeout)
+
+
+def request_codex_execution_stop(execution: Execution) -> bool:
+    if execution.status in Execution.TERMINAL_STATUSES:
+        return False
+    now = timezone.now()
+    Execution.objects.filter(pk=execution.id).update(
+        status="stopping",
+        stop_requested_at=now,
+        last_heartbeat_at=now,
+    )
+    stopped = request_codex_stop(execution.conversation_id, str(execution.id))
+    if not stopped:
+        Execution.objects.filter(pk=execution.id, status="stopping").update(
+            status="failed",
+            error="A execução não estava mais vinculada ao processo local.",
+            finished_at=timezone.now(),
+        )
+    return stopped
 
 
 def _unregister_codex_execution(execution: _ActiveCodexExecution) -> None:
@@ -313,6 +458,7 @@ def _wait_for_interaction(conv, events: "queue.Queue[dict]", method: str, params
     with _PENDING_INTERACTIONS_LOCK:
         _PENDING_INTERACTIONS.pop(token, None)
     Conversation.objects.filter(pk=conv.id).update(awaiting_human_input=False)
+    events.put({"type": "interaction_resolved", "token": token})
     if not resolved or pending.response is None:
         events.put({
             "type": "progress",
@@ -1041,6 +1187,39 @@ def codex_status(_request):
     })
 
 
+@require_GET
+def codex_execution_detail(_request, execution_id):
+    execution = Execution.objects.filter(pk=execution_id).first()
+    if execution is None:
+        return JsonResponse(
+            {"status": "error", "message": "Execução não encontrada."},
+            status=404,
+        )
+    _recover_orphaned_local_executions(execution.conversation_id)
+    execution.refresh_from_db()
+    return JsonResponse({"status": "success", "execution": _execution_public_payload(execution)})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def codex_execution_stop(_request, execution_id):
+    execution = Execution.objects.filter(pk=execution_id).first()
+    if execution is None:
+        return JsonResponse(
+            {"status": "error", "message": "Execução não encontrada."},
+            status=404,
+        )
+    _recover_orphaned_local_executions(execution.conversation_id)
+    execution.refresh_from_db()
+    stopped = request_codex_execution_stop(execution)
+    execution.refresh_from_db()
+    return JsonResponse({
+        "status": "success",
+        "stopped": stopped,
+        "execution": _execution_public_payload(execution),
+    })
+
+
 _SKILL_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 
@@ -1144,6 +1323,44 @@ def codex_chat_stream(request):
     if error:
         return JsonResponse({"status": "error", "message": error}, status=400)
 
+    _recover_orphaned_local_executions(conv.id)
+    active_execution = Execution.objects.filter(
+        conversation=conv,
+        status__in=Execution.ACTIVE_STATUSES,
+    ).first()
+    if active_execution is not None:
+        return JsonResponse({
+            "status": "error",
+            "code": "execution_active",
+            "message": "Já existe uma execução ativa nesta conversa.",
+            "conversation_id": conv.id,
+            "execution": _execution_public_payload(active_execution),
+        }, status=409)
+
+    now = timezone.now()
+    try:
+        execution_record = Execution.objects.create(
+            conversation=conv,
+            status="queued",
+            backend="local",
+            runtime_id=_CODEX_RUNTIME_ID,
+            last_heartbeat_at=now,
+        )
+    except IntegrityError:
+        active_execution = Execution.objects.filter(
+            conversation=conv,
+            status__in=Execution.ACTIVE_STATUSES,
+        ).first()
+        return JsonResponse({
+            "status": "error",
+            "code": "execution_active",
+            "message": "Já existe uma execução ativa nesta conversa.",
+            "conversation_id": conv.id,
+            "execution": (
+                _execution_public_payload(active_execution) if active_execution else None
+            ),
+        }, status=409)
+
     state = dict(conv.state or {})
     old_thread_id = state.get("codex_thread_id")
     revision_html = (
@@ -1152,9 +1369,9 @@ def codex_chat_stream(request):
     prompt = _prompt_with_history(conv, text, bool(old_thread_id))
     Message.objects.create(conversation=conv, role="user", content=text)
 
-    events: "queue.Queue[dict]" = queue.Queue()
+    events: "queue.Queue[dict]" = _ExecutionEventQueue(execution_record.id)
     sentinel = object()
-    execution = _register_codex_execution(conv.id)
+    execution = _register_codex_execution(conv.id, str(execution_record.id))
 
     def worker() -> None:
         answer_parts: list[str] = []
@@ -1217,6 +1434,11 @@ def codex_chat_stream(request):
             })
 
         try:
+            Execution.objects.filter(pk=execution_record.id, status="queued").update(
+                status="starting",
+                started_at=timezone.now(),
+                last_heartbeat_at=timezone.now(),
+            )
             if execution.stop_event.is_set():
                 raise _CodexExecutionStopped()
             session_workspace = _prepare_session_workspace(conv)
@@ -1231,6 +1453,13 @@ def codex_chat_stream(request):
                 if execution.stop_event.is_set():
                     raise _CodexExecutionStopped()
                 thread_id = client.open_thread(old_thread_id)
+                Execution.objects.filter(pk=execution_record.id).exclude(
+                    status="stopping"
+                ).update(
+                    status="running",
+                    thread_id=thread_id,
+                    last_heartbeat_at=timezone.now(),
+                )
                 state["codex_thread_id"] = thread_id
                 state["chat_engine"] = "codex-app-server"
                 conv.state = state
@@ -1269,10 +1498,18 @@ def codex_chat_stream(request):
                         return result
 
                     parts: list[str] = []
+
+                    def remember_turn(turn_id: str) -> None:
+                        Execution.objects.filter(pk=execution_record.id).update(
+                            turn_id=turn_id,
+                            last_heartbeat_at=timezone.now(),
+                        )
+
                     for event in client.turn(
                         thread_id,
                         turn_prompt,
                         server_request_handler=handle_server_request,
+                        turn_started_handler=remember_turn,
                     ):
                         if event["type"] == "delta" and event.get("phase") != "commentary":
                             parts.append(event["text"])
@@ -1482,4 +1719,5 @@ def codex_chat_stream(request):
     response["Cache-Control"] = "no-cache"
     response["X-Accel-Buffering"] = "no"
     response["X-Conversation-Id"] = str(conv.id)
+    response["X-Execution-Id"] = str(execution_record.id)
     return response

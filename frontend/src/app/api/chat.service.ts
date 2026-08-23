@@ -11,6 +11,7 @@ import {
   ConversationDetail,
   ConversationSummary,
   DatasetPage,
+  ExecutionSnapshot,
   KnowledgeBase,
   SessionAgent,
   SessionAgentDoc,
@@ -45,9 +46,10 @@ export interface ChatStreamRequest {
 // Callbacks do consumo do stream. onProgress recebe cada evento 'progress';
 // a Promise resolve com o payload final (evento 'done') ou {status:'error'}.
 export interface StreamHandlers {
-  onStarted?: (conversationId: number) => void;
+  onStarted?: (conversationId: number, executionId: string | null) => void;
   onProgress?: (evt: ChatProgressEvent) => void;
   onInteraction?: (interaction: CodexInteraction) => void;
+  onInteractionResolved?: (evt: { token?: string; sequence?: number }) => void;
   onPlan?: (evt: CodexPlanEvent) => void;
   signal?: AbortSignal;
 }
@@ -63,6 +65,12 @@ export class ChatService {
 
   getConversation(id: number | string): Observable<ConversationDetail> {
     return this.http.get<ConversationDetail>(`/api/conversations/${id}/`);
+  }
+
+  getExecution(id: string): Observable<{ status: string; execution: ExecutionSnapshot }> {
+    return this.http.get<{ status: string; execution: ExecutionSnapshot }>(
+      `/api/codex/executions/${encodeURIComponent(id)}/`,
+    );
   }
 
   getCodexSkills(): Observable<{ skills: CodexSkillPrompt[] }> {
@@ -315,8 +323,9 @@ export class ChatService {
     }
 
     const startedConversationId = Number(response.headers.get('X-Conversation-Id'));
+    const startedExecutionId = response.headers.get('X-Execution-Id');
     if (Number.isInteger(startedConversationId) && startedConversationId > 0 && handlers.onStarted) {
-      this.zone.run(() => handlers.onStarted!(startedConversationId));
+      this.zone.run(() => handlers.onStarted!(startedConversationId, startedExecutionId));
     }
 
     const reader = response.body.getReader();
@@ -346,6 +355,8 @@ export class ChatService {
           if (handlers.onProgress) this.zone.run(() => handlers.onProgress!(evt));
         } else if (evt.type === 'interaction') {
           if (handlers.onInteraction) this.zone.run(() => handlers.onInteraction!(evt.interaction));
+        } else if (evt.type === 'interaction_resolved') {
+          if (handlers.onInteractionResolved) this.zone.run(() => handlers.onInteractionResolved!(evt));
         } else if (evt.type === 'plan') {
           if (handlers.onPlan) this.zone.run(() => handlers.onPlan!(evt));
         } else if (evt.type === 'done') {
@@ -373,6 +384,26 @@ export class ChatService {
       throw new Error(payload?.message || `HTTP ${response.status}`);
     }
     return { status: payload?.status || 'success', stopped: !!payload?.stopped };
+  }
+
+  async stopExecution(executionId: string): Promise<{ status: string; stopped: boolean; execution?: ExecutionSnapshot }> {
+    const response = await fetch(`/api/codex/executions/${encodeURIComponent(executionId)}/stop/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    let payload: any = null;
+    try {
+      payload = await response.json();
+    } catch {}
+    if (!response.ok) {
+      throw new Error(payload?.message || `HTTP ${response.status}`);
+    }
+    return {
+      status: payload?.status || 'success',
+      stopped: !!payload?.stopped,
+      execution: payload?.execution,
+    };
   }
 
   async respondToCodexInteraction(token: string, payload: Record<string, unknown>): Promise<void> {
