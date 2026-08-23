@@ -4,6 +4,9 @@ Sistema de auditoria assistida por IA: um **backend Django** (motor multi-agente
 tools, integração com o gateway IaraGenAI e Athena) servindo uma API, e um
 **front Angular** (`frontend/`) que consome essa API.
 
+O Angular é a única interface da aplicação. Django opera como API, Admin e
+backend do worker; ele não mantém um frontend paralelo.
+
 > Para rodar você precisa de **três processos no ar ao mesmo tempo**: o Django
 > (porta `8000`), o worker da Atena e o Angular (porta `4200`). O front faz proxy
 > de `/api/*` para o Django; o worker continua os turnos mesmo se a tela fechar.
@@ -146,7 +149,7 @@ tools/              tools dos agentes (1 arquivo .py por tool, autodiscovery)
 prompts/            prompts dos agentes (.md)
 frontend/           app Angular (UI que consome a API)
 arquivos_suporte/   CA bundle, modelos de OCR, assets de apoio
-documentacao/       COMO_RODAR, ARQUITETURA, esquema do sistema
+documentacao/       guias atuais de operação e arquitetura
 scripts/            utilitários (setup de modelos, etc.)
 ```
 

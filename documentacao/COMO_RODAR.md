@@ -1,196 +1,108 @@
-# 🚀 Como rodar a aplicação — Auditor Multi-Agentes
+# Como rodar a Atena
 
-Guia de setup e execução do sistema Django de auditoria assistida por IA.
+A aplicação possui três processos independentes: Angular, API Django e worker
+da Atena. O Django não entrega páginas da aplicação; seu papel é API, Admin e
+execução de tarefas de backend.
 
----
+## Pré-requisitos
 
-## 1. Pré-requisitos
+- Python 3.11 ou superior.
+- Node.js 18 ou superior.
+- Codex CLI disponível no ambiente do worker.
+- Credenciais OpenAI/Iara e AWS somente para as funcionalidades que as utilizam.
 
-| Requisito | Detalhe |
-|---|---|
-| **Python** | 3.11+ (o projeto usa Django 6.0.5) |
-| **Ambiente** | SageMaker (Linux) ou máquina corporativa Windows/Itaú |
-| **Credenciais IaraGenAI** | `client_id` + `client_secret` (LLM gateway) |
-| **Credenciais AWS** | Access key / secret / session token — para consultar o Athena |
-| **CA bundle Itaú** | `arquivos_suporte/cacert.pem` — para TLS atrás do proxy corporativo |
-| **Modelos Docling** (opcional) | OCR offline de PDFs/imagens (ver §6) |
-
----
-
-## 2. Instalação
+## Instalação
 
 ```bash
-# 1. Clonar e entrar no projeto
-cd itau-hx9-modules-playbook-tech-auditors
-
-# 2. Criar e ativar o ambiente virtual
 python -m venv .venv
-source .venv/bin/activate        # Linux/SageMaker
-# .venv\Scripts\activate         # Windows
-
-# 3. Instalar dependências
+source .venv/bin/activate
 pip install -r requirements.txt
+cd frontend
+npm install
+cd ..
 ```
 
-> **Rede corporativa:** se o `pip` não alcançar o PyPI público, use o índice do
-> Artifactory do Itaú:
-> ```bash
-> pip install -r requirements.txt \
->   --index-url https://artifactory.prod.aws.cloud.ihf/artifactory/api/pypi/python-devel/simple \
->   --trusted-host artifactory.prod.aws.cloud.ihf
-> ```
+Copie `.env.example` para `.env`, preencha apenas as credenciais necessárias e
+nunca versione o arquivo resultante.
 
----
-
-## 3. Configuração (`.env`)
-
-Copie `.env.example` para `.env` e preencha:
-
-```ini
-# ── IaraGenAI (LLM gateway) ──────────────────────────────
-IARA_CLIENT_ID=seu_client_id
-IARA_CLIENT_SECRET=seu_client_secret
-IARA_ENVIRONMENT=homol
-IARA_PROVIDER=azure_openai          # bedrock | azure_openai | vertex
-IARA_MODEL=gpt-4o
-IARA_ACCESS_TOKEN=seu_access_token
-
-# ── AWS / Athena ─────────────────────────────────────────
-[759242759842_CONSUMER]
-aws_access_key_id=SEU_ACCESS_KEY
-aws_secret_access_key=SEU_SECRET
-aws_session_token=SEU_SESSION_TOKEN
-
-AWS_DEFAULT_REGION=sa-east-1
-AWS_CA_BUNDLE=arquivos_suporte/cacert.pem
-REQUESTS_CA_BUNDLE=arquivos_suporte/cacert.pem
-CURL_CA_BUNDLE=arquivos_suporte/cacert.pem
-
-# ── Django ───────────────────────────────────────────────
-SECRET_KEY=django-insecure-troque-em-producao
-DEBUG=True
-
-# ── Proxy corporativo (Windows/Itaú; deixe vazio no SageMaker) ──
-CORP_PROXY=proxynew.itau:8080
-NO_PROXY=localhost,127.0.0.1,::1,.itau,.cloud.itau.com.br
-```
-
-> **Provider é derivado do modelo em runtime.** Trocar o modelo na tela de
-> Configurações não exige mexer no `.env` — `_provider_for()` escolhe
-> bedrock/azure/vertex pelo prefixo do id (`anthropic.*` → bedrock, `gpt*` →
-> azure, `gemini*` → vertex).
-
-Variáveis opcionais reconhecidas pelo motor: `IARA_MODEL_DEFAULT`,
-`IARA_MODEL_ORQUESTRADOR`, `IARA_MODEL_MASSIVA` (default `gpt-4o-mini` para a
-análise massiva).
-
----
-
-## 4. Banco de dados
-
-O banco é **SQLite** (`db.sqlite3`), já com os agentes democratizados
-configurados via migrations (prompts, tools habilitadas, modelos).
+## Banco local
 
 ```bash
 python manage.py migrate
 ```
 
-> As migrations `0001`…`0029` recarregam os prompts de `prompts/*.md` e a
-> configuração de cada agente — o banco é a **fonte da verdade** da config dos
-> agentes.
+O desenvolvimento local usa `db.sqlite3`. API e worker compartilham esse banco;
+o timeout de escrita está ampliado para reduzir contenção. PostgreSQL será o
+backend recomendado para execução distribuída e ECS.
 
-Criar um superusuário (opcional, para o `/admin` e editar agentes por lá):
+## Iniciar os serviços
 
-```bash
-python manage.py createsuperuser
-```
-
----
-
-## 5. Rodar o servidor
-
-**Modo direto:**
+Terminal 1 — API:
 
 ```bash
-python manage.py runserver 0.0.0.0:8000
+source .venv/bin/activate
+python manage.py runserver 127.0.0.1:8000
 ```
 
-**Via script (mata a instância anterior e reinicia):**
+Terminal 2 — worker persistente:
 
 ```bash
-./restart.sh
+source .venv/bin/activate
+python manage.py run_agent_worker
 ```
 
-Acesse:
+Terminal 3 — Angular:
 
-- **Local:** http://localhost:8000
-- **SageMaker:** `https://<seu-host>.studio.sa-east-1.sagemaker.aws/codeeditor/default/ports/8000/`
+```bash
+cd frontend
+npm start -- --host 127.0.0.1
+```
 
-### Rotas principais
+Abra [http://127.0.0.1:4200](http://127.0.0.1:4200). O proxy do Angular envia
+somente `/api/*` para `http://127.0.0.1:8000`.
 
-| Página | URL |
+## Endereços
+
+| Componente | Endereço |
 |---|---|
-| Chat | `/` |
-| Manual | `/manual/` |
-| Configurações (agentes, modelos, tools) | `/settings/` |
-| Django Admin | `/admin/` |
+| Chat Angular | `http://127.0.0.1:4200/chat` |
+| Configurações Angular | `http://127.0.0.1:4200/settings` |
+| Playbooks Angular | `http://127.0.0.1:4200/playbooks` |
+| API Django | `http://127.0.0.1:8000/api/...` |
+| Django Admin | `http://127.0.0.1:8000/admin/` |
 
----
+As antigas páginas Django `/`, `/manual/` e `/settings/` não fazem parte da
+aplicação. A rota `/settings` usada pelo usuário pertence ao Angular na porta
+4200.
 
-## 6. OCR de documentos (Docling) — opcional
-
-O upload de PDF/DOCX/imagem é extraído para markdown via **Docling** com OCR
-offline (RapidOCR ONNX). Os modelos de layout/tabela ficam em
-`arquivos_suporte/docling/`.
+## Verificação rápida
 
 ```bash
-python scripts/setup_docling_models.py
+python manage.py check
+python manage.py test auditor.tests
+curl http://127.0.0.1:8000/api/codex/status/
+curl http://127.0.0.1:4200/api/codex/status/
 ```
 
-Sem os modelos locais, o Docling tenta baixar do HuggingFace (bloqueado na rede
-Itaú sem proxy). Documentos **com texto nativo** continuam funcionando via
-fallback; PDFs escaneados/imagens exigem os modelos.
+Na interface, envie uma mensagem, recarregue a página durante a execução e
+confirme que o acompanhamento retorna. Teste também uma pergunta interativa e o
+botão de parar.
 
----
+## Problemas comuns
 
-## 7. Verificação rápida
-
-1. Abra `/` e envie uma mensagem simples → o orquestrador deve responder.
-2. Faça upload de um CSV → deve virar o "dataset corrente" da conversa.
-3. Peça uma análise ("descreva o dataset") → o orquestrador delega para o
-   `analista_dados`.
-4. Abra `/settings/` → confira agentes, modelos disponíveis e tools habilitadas.
-
----
-
-## 8. Problemas comuns
-
-| Sintoma | Causa provável | Solução |
+| Sintoma | Causa provável | Ação |
 |---|---|---|
-| `Falha ao iniciar cliente IaraGenAI` | credenciais IARA ausentes/erradas | conferir `IARA_CLIENT_ID/SECRET/ENVIRONMENT` no `.env` |
-| Erro SSL/CA ao consultar Athena | CA bundle não encontrado | garantir `arquivos_suporte/cacert.pem` e as vars `*_CA_BUNDLE` |
-| `database is locked` | escrita concorrente no SQLite | ver `melhorias/opniao_claude.md` (Tier 1.1 — WAL/Postgres) |
-| Docling não extrai imagem | modelos OCR ausentes | rodar `scripts/setup_docling_models.py` |
-| `docling não está instalado` | dependência faltando | instalar `docling rapidocr_onnxruntime` (ver §2) |
-| Página HTML de erro em vez de JSON | `DEBUG=True` e exceção não tratada | ler o traceback; a maioria dos endpoints já devolve JSON |
+| Angular abre sem dados | API desligada | iniciar `runserver` |
+| Mensagem permanece na fila | worker desligado | iniciar `run_agent_worker` |
+| `ECONNREFUSED` no proxy | porta 8000 indisponível | verificar o processo Django |
+| `database is locked` recorrente | concorrência excessiva no SQLite | reiniciar API/worker; migrar para PostgreSQL |
+| Codex indisponível | CLI ou credencial ausente | executar `codex --version` e revisar `.env` |
 
----
+## Produção
 
-## 9. Notas de deploy
-
-- O sistema hoje pressupõe **processo único** (o registro de "stop" das gerações
-  vive em memória por processo — `_STOP_EVENTS`). Rodar com Gunicorn
-  multi-worker quebra o botão de parar. Ver `melhorias/opniao_claude.md` (Tier 3.5).
-- `DEBUG=True` e `SECRET_KEY` hardcoded no `settings.py` **não** devem ir para
-  produção sem ajuste.
-- Para escalar usuários simultâneos, planejar a migração de SQLite → PostgreSQL
-  (ver `melhorias/opniao_claude.md`, Tier 1.1).
-
----
-
-## 10. Como adicionar uma nova tool
-
-Resumo: criar **um** arquivo `.py` em `tools/` com o decorator `@tool` — o
-autodiscovery registra sozinho. Detalhes completos em
-[`../COMO_SUBIR_UMA_TOOL.txt`](../COMO_SUBIR_UMA_TOOL.txt) e na arquitetura
-([`ARQUITETURA_COMPLETA.md`](ARQUITETURA_COMPLETA.md), §5).
+- Angular deve ser publicado como aplicação estática separada.
+- Django deve rodar como serviço de API.
+- O worker deve rodar em processo ou task ECS independente.
+- PostgreSQL/RDS substitui SQLite.
+- S3 substitui o filesystem local dos chats.
+- Secrets Manager fornece credenciais; segredos nunca entram na imagem.

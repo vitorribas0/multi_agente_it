@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.shortcuts import render, get_object_or_404
+from django.shortcuts import get_object_or_404
 from django.http import JsonResponse, FileResponse, Http404, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
@@ -34,18 +34,6 @@ BATCH_MAX_FILES = 200              # nº máx. de arquivos por upload em lote
 
 
 # ── Páginas ──────────────────────────────────────────────────────────
-
-def index(request):
-    return render(request, "auditor/index.html")
-
-
-def manual(request):
-    return render(request, "auditor/manual.html")
-
-
-def settings_page(request):
-    return render(request, "auditor/settings.html")
-
 
 # ── Helpers de serialização ──────────────────────────────────────────
 

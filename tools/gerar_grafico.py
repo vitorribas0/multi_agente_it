@@ -17,7 +17,7 @@ from io import BytesIO
 from .registry import tool, publish_attachment
 
 
-# Paleta da marca (mesma do design system em static/css/style.css).
+# Paleta Itaú usada nos gráficos gerados pelo backend.
 # Tons vivos/brilhantes — pensados p/ "saltar" sobre o fundo escuro do chat.
 _PALETTE = [
     "#818cf8", "#a78bfa", "#22d3ee", "#34d399",

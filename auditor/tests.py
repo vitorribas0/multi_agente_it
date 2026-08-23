@@ -34,6 +34,17 @@ from .models import Agent, Conversation, Execution, ExecutionInteraction, Messag
 from tools.gerar_html import gerar_html
 
 
+class ApiOnlyBoundaryTests(TestCase):
+    def test_legacy_django_frontend_routes_are_not_exposed(self):
+        for path in ("/", "/manual/", "/settings/"):
+            with self.subTest(path=path):
+                self.assertEqual(self.client.get(path).status_code, 404)
+
+    def test_admin_and_api_remain_available(self):
+        self.assertEqual(self.client.get("/admin/").status_code, 302)
+        self.assertEqual(self.client.get("/api/codex/status/").status_code, 200)
+
+
 class CodexAppServerEventTests(SimpleTestCase):
     @staticmethod
     def _client() -> CodexAppServer:

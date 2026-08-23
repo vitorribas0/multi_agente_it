@@ -6,10 +6,6 @@ from . import codex_views
 app_name = "auditor"
 
 urlpatterns = [
-    path("", views.index, name="index"),
-    path("manual/", views.manual, name="manual"),
-    path("settings/", views.settings_page, name="settings"),
-
     # Chat
     path("api/chat/", views.chat_message, name="chat_message"),
     path("api/chat/stream/", views.chat_stream, name="chat_stream"),

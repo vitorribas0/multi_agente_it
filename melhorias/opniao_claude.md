@@ -1,5 +1,9 @@
 # 🧭 Opinião Técnica — Auditor Multi-Agentes
 
+> **Registro histórico:** esta análise antecede a consolidação do frontend
+> Angular e do worker persistente da Atena. Para o estado atual, use
+> [`documentacao/ARQUITETURA_COMPLETA.md`](../documentacao/ARQUITETURA_COMPLETA.md).
+>
 > **Autor:** Claude (Opus 4.8) · **Data:** 2026-07-21
 > **Base da análise:** leitura estática de `ai_service.py`, `views.py`,
 > `tools/registry.py`, `call_agent.py`, `executar_pandas.py`, `consulta_aws.py`,
