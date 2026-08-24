@@ -246,12 +246,14 @@
         <section class="agent-plan" *ngIf="livePlan.length">
           <div class="agent-plan-heading">
             <span>Plano do agente</span>
-            <small>ao vivo</small>
+            <small>{{ planProgressLabel }}</small>
           </div>
           <p *ngIf="livePlanExplanation">{{ livePlanExplanation }}</p>
           <div class="agent-plan-step" *ngFor="let item of livePlan"
                [class.plan-active]="item.status === 'inProgress'"
-               [class.plan-done]="item.status === 'completed'">
+               [class.plan-done]="item.status === 'completed'"
+               [class.plan-failed]="item.status === 'failed'"
+               [class.plan-skipped]="item.status === 'skipped'">
             <span class="agent-plan-icon">{{ planIcon(item.status) }}</span>
             <span>{{ item.step }}</span>
           </div>

@@ -123,6 +123,10 @@ Abra **http://localhost:4200** no navegador.
 2. Envie uma mensagem simples → o orquestrador responde.
 3. Faça upload de um CSV → vira o "dataset corrente" da conversa.
 4. Abra a Prateleira / Playbooks → devem listar itens vindos da API.
+5. Num Playbook, conecte duas etapas, declare a saída esperada e clique em
+   **Validar** → a ordem real deve aparecer em **Execução e versões**.
+6. Selecione o Playbook no chat → o plano deve avançar por etapa e sobreviver
+   ao fechamento da tela.
 
 ---
 
@@ -147,6 +151,7 @@ auditor/            app Django (models, views, API, motor multi-agente)
 auditor_project/    settings/urls do Django
 tools/              tools dos agentes (1 arquivo .py por tool, autodiscovery)
 prompts/            prompts dos agentes (.md)
+.agents/skills/      instruções especializadas aplicadas pela Atena/Codex
 frontend/           app Angular (UI que consome a API)
 arquivos_suporte/   CA bundle, modelos de OCR, assets de apoio
 documentacao/       guias atuais de operação e arquitetura
@@ -156,3 +161,8 @@ scripts/            utilitários (setup de modelos, etc.)
 Para adicionar uma tool nova: crie **um** arquivo em `tools/` com o decorator
 `@tool` — o autodiscovery registra sozinho. Detalhes em
 [`documentacao/COMO_SUBIR_UMA_TOOL.txt`](documentacao/COMO_SUBIR_UMA_TOOL.txt).
+
+Playbooks da interface Angular controlam o worker Atena/Codex: o root contém
+regras globais, os demais nós são etapas, as arestas são dependências e cada
+salvamento cria uma versão auditável. O worker congela um snapshot no início,
+portanto uma edição posterior não altera uma execução já enfileirada.

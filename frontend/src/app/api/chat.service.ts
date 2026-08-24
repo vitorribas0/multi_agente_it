@@ -28,6 +28,8 @@ export interface BatchProgressEvent {
 
 export interface CodexSkillPrompt {
   slug: string;
+  name?: string;
+  description?: string;
   content: string;
 }
 

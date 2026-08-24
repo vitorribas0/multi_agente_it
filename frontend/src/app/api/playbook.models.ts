@@ -17,6 +17,12 @@ export interface PlaybookNode {
   model: string;
   temperature: number;
   tools_enabled: string[];
+  skills_enabled: string[];
+  expected_output: string;
+  requires_approval: boolean;
+  allow_user_questions: boolean;
+  max_retries: number;
+  on_error: 'stop' | 'continue';
   is_root: boolean;
   canvas: CanvasPos;
   // id de cliente usado só no editor para casar arestas antes de o backend
@@ -41,6 +47,16 @@ export interface PlaybookSummary {
   description: string;
   icon: string;
   node_count: number;
+  stage_count: number;
+  status: 'draft' | 'published';
+  version: number;
+  revision_count: number;
+}
+
+export interface PlaybookExecutionPolicy {
+  final_synthesis: boolean;
+  require_stage_confirmation: boolean;
+  stop_on_error: boolean;
 }
 
 // Grafo completo (editor de canvas).
@@ -49,6 +65,10 @@ export interface PlaybookDetail {
   name: string;
   description: string;
   icon: string;
+  status: 'draft' | 'published';
+  version: number;
+  revision_count: number;
+  execution_policy: PlaybookExecutionPolicy;
   nodes: PlaybookNode[];
   edges: PlaybookEdge[];
   suggestions: PlaybookSuggestion[];
@@ -59,9 +79,32 @@ export interface PlaybookSavePayload {
   name: string;
   description: string;
   icon: string;
+  status: 'draft' | 'published';
+  execution_policy: PlaybookExecutionPolicy;
   nodes: PlaybookNode[];
   edges: PlaybookEdge[];
   suggestions: PlaybookSuggestion[];
+}
+
+export interface PlaybookValidationStage {
+  slug: string;
+  name: string;
+  requires_approval: boolean;
+  skills: string[];
+}
+
+export interface PlaybookValidationResult {
+  status: 'success' | 'error';
+  valid: boolean;
+  message?: string;
+  warnings?: string[];
+  stages?: PlaybookValidationStage[];
+}
+
+export interface PlaybookRevision {
+  version: number;
+  status: 'draft' | 'published';
+  created_at: string;
 }
 
 export interface PlaybookWriteResult {

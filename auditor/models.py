@@ -56,6 +56,9 @@ class BatchJob(models.Model):
     Segue o padrão da casa (estado em JSONField único; ver Agent.tools_enabled,
     Playbook.nodes) — o blob de merge vive em ``meta``.
     """
+    id = models.AutoField(
+        auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+    )
     job_id = models.CharField(max_length=128, unique=True)
     status = models.CharField(max_length=24, default="PENDING")
     meta = models.JSONField(
@@ -150,40 +153,60 @@ class Knowledge(models.Model):
 # ════════════════════════════════════════════════════════════════════════
 
 class Playbook(models.Model):
-    """Um pipeline multi-agente nomeado, autorado num canvas visual.
+    """Um fluxo Atena/Codex versionado, autorado num canvas visual.
 
-    Guarda um grafo de nós-agente + arestas direcionadas de delegação, com
-    exatamente um nó ROOT (orquestrador). Ao rodar numa conversa, o ROOT vira
-    o orquestrador e ``call_agent`` resolve SOMENTE os nós deste playbook
-    (isolado da tabela Agent global), restrito aos especialistas alcançáveis
-    por aresta a partir de cada nó.
+    Guarda um DAG de etapas e exatamente um nó ROOT (orquestrador). Antes de
+    cada execução o fluxo vira um snapshot imutável; o worker percorre as
+    etapas em ordem topológica no mesmo thread Codex, preserva os handoffs e
+    opcionalmente produz uma síntese final.
 
     O grafo inteiro vive em JSON num único registro (segue o padrão da casa —
     Agent.tools_enabled, SessionAgent.documents, Conversation.state já são
     JSONField). O canvas salva o blob {nodes, edges, suggestions} de forma
     atômica; não há ganho em normalizar em tabelas-filhas.
 
-    Shape de um nó (duck-types a superfície que RuntimeAgent/run_agent/
-    call_agent consomem — slug/name/system_prompt/model/temperature/
-    tools_enabled)::
+    Shape principal de um nó::
 
         {"slug": "orquestrador", "name": "Orquestrador",
          "system_prompt": "...", "model": "gpt-4o", "temperature": 0.7,
-         "tools_enabled": ["call_agent", "gerar_sql"], "is_root": true,
-         "icon": "🧭", "description": "...", "canvas": {"x": 120, "y": 80}}
+         "skills_enabled": ["auditoria-interna"], "expected_output": "...",
+         "requires_approval": false, "max_retries": 1, "on_error": "stop",
+         "is_root": true, "icon": "🧭", "description": "...",
+         "canvas": {"x": 120, "y": 80}}
 
     O slug é gerado/mantido pelo backend no save (estável em rename, único no
-    playbook). ``canvas`` é layout opaco, ignorado pelo motor.
+    playbook). ``canvas`` é layout opaco, ignorado pelo motor. Os campos
+    ``model``, ``temperature`` e ``tools_enabled`` são mantidos por
+    compatibilidade com Playbooks antigos, mas a execução atual é governada
+    pelas etapas, skills e políticas do worker Codex.
 
-    Aresta: ``{"source": "<slug>", "target": "<slug>"}`` — indica que
-    ``source`` pode delegar para ``target`` via call_agent.
+    Aresta: ``{"source": "<slug>", "target": "<slug>"}`` — indica que a
+    etapa ``target`` depende da conclusão de ``source``.
 
     Sugestão: ``{"title": "...", "text": "..."}`` — card da tela de
     boas-vindas do chat quando este playbook está ativo.
     """
+    id = models.AutoField(
+        auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+    )
     name = models.CharField(max_length=120)
     description = models.CharField(max_length=240, blank=True, default="")
     icon = models.CharField(max_length=8, default="📘")
+    status = models.CharField(
+        max_length=16,
+        choices=(("draft", "Rascunho"), ("published", "Publicado")),
+        default="draft",
+        db_index=True,
+    )
+    version = models.PositiveIntegerField(default=1)
+    execution_policy = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Política Codex-native: síntese final, confirmação por etapa e "
+            "comportamento em caso de falha."
+        ),
+    )
     nodes = models.JSONField(
         default=list,
         help_text="Lista de nós-agente do grafo (ver shape na docstring).",
@@ -206,6 +229,31 @@ class Playbook(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class PlaybookRevision(models.Model):
+    """Snapshot auditável criado a cada gravação de um Playbook."""
+
+    playbook = models.ForeignKey(
+        Playbook,
+        related_name="revisions",
+        on_delete=models.CASCADE,
+    )
+    version = models.PositiveIntegerField()
+    snapshot = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["playbook", "version"],
+                name="unique_playbook_revision_version",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.playbook} v{self.version}"
 
 
 # ════════════════════════════════════════════════════════════════════════

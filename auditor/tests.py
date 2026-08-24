@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 
 from .codex_app_server import CodexAppServer
 from .codex_views import (
@@ -28,9 +28,18 @@ from .codex_views import (
     _register_codex_execution,
     _recover_orphaned_local_executions,
     _unregister_codex_execution,
+    run_queued_codex_execution,
     request_codex_execution_stop,
 )
-from .models import Agent, Conversation, Execution, ExecutionInteraction, Message
+from .models import (
+    Agent, Conversation, Execution, ExecutionInteraction, Message, Playbook,
+    PlaybookRevision,
+)
+from .playbook_runtime import (
+    ordered_playbook_nodes,
+    playbook_stage_prompt,
+    snapshot_for_playbook,
+)
 from tools.gerar_html import gerar_html
 
 
@@ -329,6 +338,7 @@ class CodexInteractionEndpointTests(TestCase):
             }),
             content_type="application/json",
         )
+        self.assertEqual(response.status_code, 200, getattr(response, "content", b""))
         list(response.streaming_content)
 
         self.assertEqual(response.status_code, 200)
@@ -428,6 +438,246 @@ class CodexInteractionEndpointTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(pending.ready.is_set())
         self.assertEqual(pending.response["answers"]["periodo"]["answers"], ["2026"])
+
+
+class CodexNativePlaybookTests(TransactionTestCase):
+    @staticmethod
+    def payload():
+        return {
+            "name": "Auditoria orientada",
+            "description": "Fluxo rastreável",
+            "icon": "🛡️",
+            "status": "published",
+            "execution_policy": {
+                "final_synthesis": True,
+                "require_stage_confirmation": False,
+                "stop_on_error": True,
+            },
+            "nodes": [
+                {
+                    "id": "root", "slug": "orquestrador", "name": "Orquestrador",
+                    "description": "Governar a auditoria", "icon": "🧭",
+                    "system_prompt": "Preserve evidências.", "model": "gpt-4o",
+                    "temperature": 0.2, "tools_enabled": [], "skills_enabled": [],
+                    "expected_output": "", "requires_approval": False,
+                    "allow_user_questions": True, "max_retries": 0,
+                    "on_error": "stop", "is_root": True,
+                    "canvas": {"x": 10, "y": 10},
+                },
+                {
+                    "id": "dados", "slug": "dados", "name": "Validar dados",
+                    "description": "Validar completude", "icon": "📊",
+                    "system_prompt": "Concilie as fontes.", "model": "gpt-4o",
+                    "temperature": 0.2, "tools_enabled": [], "skills_enabled": [],
+                    "expected_output": "Inventário e divergências",
+                    "requires_approval": False, "allow_user_questions": True,
+                    "max_retries": 1, "on_error": "stop", "is_root": False,
+                    "canvas": {"x": 250, "y": 10},
+                },
+                {
+                    "id": "relatorio", "slug": "relatorio", "name": "Relatar",
+                    "description": "Consolidar achados", "icon": "📄",
+                    "system_prompt": "Diferencie fatos e hipóteses.", "model": "gpt-4o",
+                    "temperature": 0.2, "tools_enabled": [], "skills_enabled": [],
+                    "expected_output": "Relatório rastreável",
+                    "requires_approval": False, "allow_user_questions": True,
+                    "max_retries": 0, "on_error": "stop", "is_root": False,
+                    "canvas": {"x": 500, "y": 10},
+                },
+            ],
+            "edges": [
+                {"source": "orquestrador", "target": "dados"},
+                {"source": "dados", "target": "relatorio"},
+            ],
+            "suggestions": [{"title": "Teste", "text": "Execute a auditoria"}],
+        }
+
+    def test_validates_the_real_stage_order_and_rejects_cycles(self):
+        payload = self.payload()
+        response = self.client.post(
+            "/api/playbooks/validate/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [stage["name"] for stage in response.json()["stages"]],
+            ["Validar dados", "Relatar"],
+        )
+
+        payload["edges"].append({"source": "relatorio", "target": "dados"})
+        response = self.client.post(
+            "/api/playbooks/validate/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("ciclo", response.json()["message"].lower())
+
+    def test_drafts_are_visible_in_the_editor_but_not_in_the_chat_picker(self):
+        payload = self.payload()
+        payload["status"] = "draft"
+        created = self.client.post(
+            "/api/playbooks/create/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(len(self.client.get("/api/playbooks/").json()["playbooks"]), 1)
+        self.assertEqual(
+            self.client.get("/api/playbooks/?published_only=1").json()["playbooks"],
+            [],
+        )
+
+    def test_every_save_is_versioned_and_a_revision_restore_is_non_destructive(self):
+        response = self.client.post(
+            "/api/playbooks/create/",
+            data=json.dumps(self.payload()),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        playbook_id = response.json()["playbook"]["id"]
+        self.assertEqual(PlaybookRevision.objects.filter(playbook_id=playbook_id).count(), 1)
+
+        changed = self.payload()
+        changed["description"] = "Descrição v2"
+        self.client.post(
+            f"/api/playbooks/{playbook_id}/update/",
+            data=json.dumps(changed),
+            content_type="application/json",
+        )
+        playbook = Playbook.objects.get(pk=playbook_id)
+        self.assertEqual(playbook.version, 2)
+        self.assertEqual(playbook.revisions.count(), 2)
+
+        restored = self.client.post(
+            f"/api/playbooks/{playbook_id}/revisions/1/restore/",
+            data="{}",
+            content_type="application/json",
+        )
+        playbook.refresh_from_db()
+        self.assertEqual(restored.status_code, 200)
+        self.assertEqual(playbook.version, 3)
+        self.assertEqual(playbook.description, "Fluxo rastreável")
+        self.assertEqual(playbook.revisions.count(), 3)
+
+    def test_queue_keeps_an_immutable_snapshot_and_exposes_the_stage_plan(self):
+        agent = Agent.objects.create(name="Atena", slug="atena-playbook", is_default=True)
+        playbook = Playbook.objects.create(**{
+            key: value for key, value in self.payload().items()
+            if key in {"name", "description", "icon", "status", "execution_policy", "nodes", "edges", "suggestions"}
+        })
+        conversation = Conversation.objects.create(title="Snapshot", agent=agent)
+        response = self.client.post(
+            "/api/codex/chat/stream/",
+            data=json.dumps({
+                "conversation_id": conversation.id,
+                "playbook_id": playbook.id,
+                "message": "Analise os dados",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200, getattr(response, "content", b""))
+        list(response.streaming_content)
+        execution = Execution.objects.get(pk=response["X-Execution-Id"])
+        self.assertEqual([item["step"] for item in execution.plan], ["Validar dados", "Relatar"])
+        self.assertEqual(execution.request_payload["_playbook_snapshot"]["version"], 1)
+
+        playbook.name = "Mudou durante a fila"
+        playbook.version = 2
+        playbook.save(update_fields=["name", "version"])
+        execution.refresh_from_db()
+        self.assertEqual(
+            execution.request_payload["_playbook_snapshot"]["name"],
+            "Auditoria orientada",
+        )
+
+    def test_worker_runs_each_stage_then_synthesizes_in_the_same_thread(self):
+        playbook = Playbook.objects.create(**{
+            key: value for key, value in self.payload().items()
+            if key in {"name", "description", "icon", "status", "execution_policy", "nodes", "edges", "suggestions"}
+        })
+        conversation = Conversation.objects.create(title="Execução Playbook", playbook=playbook)
+        snapshot = snapshot_for_playbook(playbook)
+        snapshot["nodes"][1]["requires_approval"] = True
+        execution = Execution.objects.create(
+            conversation=conversation,
+            backend="local-worker",
+            status="starting",
+            request_payload={
+                "message": "Faça a auditoria",
+                "_prepared_prompt": "Pedido preparado",
+                "_playbook_snapshot": snapshot,
+            },
+        )
+
+        class FakeCodex:
+            prompts = []
+
+            def __init__(self, _cwd):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def initialize(self):
+                return None
+
+            def open_thread(self, _old_thread_id=None):
+                return "thread-unico"
+
+            def turn(self, _thread_id, prompt, **_kwargs):
+                self.prompts.append(prompt)
+                yield {"type": "delta", "phase": None, "text": f"resultado-{len(self.prompts)}"}
+                yield {"type": "completed", "status": "completed", "error": None}
+
+            def interrupt(self):
+                return True
+
+            def close(self):
+                return None
+
+        FakeCodex.prompts = []
+        with TemporaryDirectory() as temp_dir, override_settings(BASE_DIR=Path(temp_dir)), patch(
+            "auditor.codex_views.CodexAppServer", FakeCodex
+        ), patch(
+            "auditor.codex_views._wait_for_interaction",
+            return_value={"answers": {"stage_gate": {"answers": ["Aprovar"]}}},
+        ) as gate:
+            result = run_queued_codex_execution(execution)
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(FakeCodex.prompts), 3)
+        gate.assert_called_once()
+        self.assertIn("Etapa: 1 de 2", FakeCodex.prompts[0])
+        self.assertIn("Etapa: 2 de 2", FakeCodex.prompts[1])
+        self.assertIn("Todas as etapas", FakeCodex.prompts[2])
+        self.assertEqual(
+            [item["status"] for item in result.plan],
+            ["completed", "completed"],
+        )
+
+    def test_runtime_prompt_declares_skills_dependencies_and_expected_output(self):
+        snapshot = snapshot_for_playbook(Playbook.objects.create(**{
+            key: value for key, value in self.payload().items()
+            if key in {"name", "description", "icon", "status", "execution_policy", "nodes", "edges", "suggestions"}
+        }))
+        snapshot["nodes"][0]["skills_enabled"] = ["auditoria-interna"]
+        snapshot["nodes"][1]["skills_enabled"] = ["ciencia-dados"]
+        stages = ordered_playbook_nodes(snapshot)
+        prompt = playbook_stage_prompt(snapshot, stages[0], 0, 2, "Pedido")
+        self.assertIn("auditoria-interna, ciencia-dados", prompt)
+        self.assertIn("Inventário e divergências", prompt)
+        self.assertIn("Orquestrador", prompt)
+
+
+class CodexInteractionFollowupTests(TestCase):
+    def tearDown(self):
+        with _PENDING_INTERACTIONS_LOCK:
+            _PENDING_INTERACTIONS.clear()
 
     def test_grants_only_requested_permissions_for_turn(self):
         requested = {"network": {"enabled": True}, "fileSystem": None}

@@ -12,15 +12,20 @@ import { FormsModule } from '@angular/forms';
 
 import { ConfigService } from '../../api/config.service';
 import { ToolInfo } from '../../api/config.models';
+import { ChatService, CodexSkillPrompt } from '../../api/chat.service';
 import { PlaybookService } from '../../api/playbook.service';
 import {
   PlaybookDetail,
   PlaybookEdge,
+  PlaybookExecutionPolicy,
   PlaybookNode,
+  PlaybookRevision,
+  PlaybookSavePayload,
   PlaybookSuggestion,
+  PlaybookValidationStage,
 } from '../../api/playbook.models';
 
-type Tab = 'canvas' | 'suggestions';
+type Tab = 'canvas' | 'execution' | 'suggestions';
 
 // Editor de canvas de um playbook: nós arrastáveis, arestas de delegação
 // (clique na porta de saída → clique no nó destino), painel lateral do nó
@@ -47,6 +52,14 @@ export class PlaybookEditorComponent implements OnInit {
   name = '';
   description = '';
   icon = '📘';
+  publicationStatus: 'draft' | 'published' = 'draft';
+  version = 1;
+  revisionCount = 0;
+  executionPolicy: PlaybookExecutionPolicy = {
+    final_synthesis: true,
+    require_stage_confirmation: false,
+    stop_on_error: true,
+  };
 
   // Grafo
   nodes: PlaybookNode[] = [];
@@ -56,12 +69,17 @@ export class PlaybookEditorComponent implements OnInit {
   // Inventário para os selects/checkboxes
   models: string[] = [];
   tools: ToolInfo[] = [];
+  skills: CodexSkillPrompt[] = [];
+  revisions: PlaybookRevision[] = [];
+  validationStages: PlaybookValidationStage[] = [];
 
   // UI
   tab: Tab = 'canvas';
   selectedId: string | null = null;
   loading = true;
   saving = false;
+  validating = false;
+  restoring = false;
   status = '';
   warnings: string[] = [];
 
@@ -90,10 +108,15 @@ export class PlaybookEditorComponent implements OnInit {
 
   constructor(
     private config: ConfigService,
+    private chat: ChatService,
     private api: PlaybookService,
   ) {}
 
   ngOnInit(): void {
+    this.chat.getCodexSkills().subscribe({
+      next: ({ skills }) => (this.skills = skills || []),
+      error: () => (this.skills = []),
+    });
     this.config.getConfig().subscribe({
       next: (cfg) => {
         this.models = cfg.models || [];
@@ -130,9 +153,28 @@ export class PlaybookEditorComponent implements OnInit {
     this.name = pb.name;
     this.description = pb.description;
     this.icon = pb.icon || '📘';
-    this.nodes = (pb.nodes || []).map((n) => ({ ...n, id: n.slug }));
+    this.publicationStatus = pb.status || 'draft';
+    this.version = pb.version || 1;
+    this.revisionCount = pb.revision_count || 0;
+    this.executionPolicy = {
+      final_synthesis: pb.execution_policy?.final_synthesis !== false,
+      require_stage_confirmation: !!pb.execution_policy?.require_stage_confirmation,
+      stop_on_error: pb.execution_policy?.stop_on_error !== false,
+    };
+    this.nodes = (pb.nodes || []).map((n) => ({
+      ...n,
+      skills_enabled: n.skills_enabled || [],
+      expected_output: n.expected_output || '',
+      requires_approval: !!n.requires_approval,
+      allow_user_questions: n.allow_user_questions !== false,
+      max_retries: n.max_retries || 0,
+      on_error: n.on_error || 'stop',
+      id: n.slug,
+    }));
     this.edges = (pb.edges || []).map((e) => ({ ...e }));
     this.suggestions = (pb.suggestions || []).map((s) => ({ ...s }));
+    this.validationStages = [];
+    this.loadRevisions();
   }
 
   // Playbook novo já nasce com um orquestrador root para não começar vazio.
@@ -140,6 +182,9 @@ export class PlaybookEditorComponent implements OnInit {
     this.name = '';
     this.description = '';
     this.icon = '📘';
+    this.publicationStatus = 'draft';
+    this.version = 1;
+    this.revisionCount = 0;
     const root = this.blankNode('Orquestrador', '🧭', true);
     root.tools_enabled = this.tools.some((t) => t.slug === 'call_agent') ? ['call_agent'] : [];
     root.canvas = { x: 60, y: 60 };
@@ -164,6 +209,12 @@ export class PlaybookEditorComponent implements OnInit {
       model: this.models[0] || 'gpt-4o',
       temperature: 0.7,
       tools_enabled: [],
+      skills_enabled: [],
+      expected_output: '',
+      requires_approval: false,
+      allow_user_questions: true,
+      max_retries: 0,
+      on_error: 'stop',
       is_root: isRoot,
       canvas: { x: 120, y: 120 },
     };
@@ -430,6 +481,16 @@ export class PlaybookEditorComponent implements OnInit {
     else n.tools_enabled.push(slug);
   }
 
+  isSkillOn(n: PlaybookNode, slug: string): boolean {
+    return n.skills_enabled.includes(slug);
+  }
+
+  toggleSkill(n: PlaybookNode, slug: string): void {
+    const i = n.skills_enabled.indexOf(slug);
+    if (i >= 0) n.skills_enabled.splice(i, 1);
+    else n.skills_enabled.push(slug);
+  }
+
   // ── Sugestões ──────────────────────────────────────────────────────
   addSuggestion(): void {
     this.suggestions.push({ title: '', text: '' });
@@ -440,6 +501,77 @@ export class PlaybookEditorComponent implements OnInit {
   }
 
   // ── Salvar ─────────────────────────────────────────────────────────
+  private buildPayload(): PlaybookSavePayload {
+    return {
+      name: this.name.trim(),
+      description: this.description.trim(),
+      icon: this.icon.trim() || '📘',
+      status: this.publicationStatus,
+      execution_policy: { ...this.executionPolicy },
+      nodes: this.nodes.map((n) => ({ ...n, slug: n.slug || '' })),
+      edges: this.edges.map((e) => ({ ...e })),
+      suggestions: this.suggestions
+        .map((s) => ({ title: (s.title || '').trim(), text: (s.text || '').trim() }))
+        .filter((s) => s.text),
+    };
+  }
+
+  validate(): void {
+    if (!this.name.trim()) {
+      this.status = '❌ Dê um nome ao Playbook.';
+      return;
+    }
+    this.validating = true;
+    this.status = '⏳ Validando o fluxo real…';
+    this.api.validate(this.buildPayload()).subscribe({
+      next: (data) => {
+        this.validating = false;
+        this.warnings = data.warnings || [];
+        this.validationStages = data.stages || [];
+        this.status = this.warnings.length
+          ? '✅ Fluxo válido, com pontos de atenção.'
+          : '✅ Fluxo válido e pronto para execução.';
+        this.tab = 'execution';
+      },
+      error: (e) => {
+        this.validating = false;
+        this.validationStages = [];
+        this.status = '❌ ' + (e?.error?.message || 'Fluxo inválido.');
+      },
+    });
+  }
+
+  private loadRevisions(): void {
+    if (!this.playbookId) {
+      this.revisions = [];
+      return;
+    }
+    this.api.revisions(this.playbookId).subscribe({
+      next: ({ revisions }) => (this.revisions = revisions || []),
+      error: () => (this.revisions = []),
+    });
+  }
+
+  restoreRevision(revision: PlaybookRevision): void {
+    if (!this.playbookId || this.restoring) return;
+    if (!confirm(`Restaurar a versão ${revision.version} como uma nova versão?`)) return;
+    this.restoring = true;
+    this.status = `⏳ Restaurando v${revision.version}…`;
+    this.api.restore(this.playbookId, revision.version).subscribe({
+      next: (data) => {
+        this.restoring = false;
+        if (data.playbook) this.applyDetail(data.playbook);
+        this.warnings = data.warnings || [];
+        this.status = `✅ Versão ${revision.version} restaurada como v${this.version}.`;
+        this.saved.emit();
+      },
+      error: (e) => {
+        this.restoring = false;
+        this.status = '❌ ' + (e?.error?.message || 'Falha ao restaurar.');
+      },
+    });
+  }
+
   save(): void {
     if (!this.name.trim()) {
       this.tab = 'canvas';
@@ -453,19 +585,7 @@ export class PlaybookEditorComponent implements OnInit {
     this.saving = true;
     this.status = '⏳ Salvando…';
     this.warnings = [];
-    const payload = {
-      name: this.name.trim(),
-      description: this.description.trim(),
-      icon: this.icon.trim() || '📘',
-      // Mantém o id de cliente (para o backend casar as arestas) mas NÃO o usa
-      // como slug: nó novo vai com slug vazio e o backend o deriva do nome
-      // (evita slugs feios tipo 'n2_41530' virando o "nome" do agente).
-      nodes: this.nodes.map((n) => ({ ...n, slug: n.slug || '' })),
-      edges: this.edges.map((e) => ({ ...e })),
-      suggestions: this.suggestions
-        .map((s) => ({ title: (s.title || '').trim(), text: (s.text || '').trim() }))
-        .filter((s) => s.text),
-    };
+    const payload = this.buildPayload();
     const req = this.playbookId
       ? this.api.update(this.playbookId, payload)
       : this.api.create(payload);
@@ -495,7 +615,7 @@ export class PlaybookEditorComponent implements OnInit {
   // Formato de arquivo portável: o grafo do playbook sem o id do registro nem
   // os ids de cliente dos nós (que são efêmeros). Um envelope com versão
   // permite evoluir o formato no futuro.
-  private readonly EXPORT_VERSION = 1;
+  private readonly EXPORT_VERSION = 2;
 
   exportJson(): void {
     const doc = {
@@ -504,6 +624,8 @@ export class PlaybookEditorComponent implements OnInit {
       name: this.name.trim(),
       description: this.description.trim(),
       icon: this.icon.trim() || '📘',
+      status: this.publicationStatus,
+      execution_policy: { ...this.executionPolicy },
       // Slug estável, sem o id de cliente (reconstruído no import).
       nodes: this.nodes.map(({ id, ...n }) => ({ ...n, slug: n.slug || id || '' })),
       edges: this.edges.map((e) => ({ ...e })),
@@ -582,6 +704,14 @@ export class PlaybookEditorComponent implements OnInit {
         tools_enabled: Array.isArray(n?.tools_enabled)
           ? n.tools_enabled.map((s: any) => String(s))
           : [],
+        skills_enabled: Array.isArray(n?.skills_enabled)
+          ? n.skills_enabled.map((s: any) => String(s))
+          : [],
+        expected_output: (n?.expected_output || '').toString(),
+        requires_approval: !!n?.requires_approval,
+        allow_user_questions: n?.allow_user_questions !== false,
+        max_retries: Math.max(0, Math.min(3, Number(n?.max_retries) || 0)),
+        on_error: n?.on_error === 'continue' ? 'continue' : 'stop',
         is_root: !!n?.is_root,
         canvas: {
           x: Number(n?.canvas?.x) || 0,
@@ -602,15 +732,25 @@ export class PlaybookEditorComponent implements OnInit {
 
     // Importar cria um playbook NOVO (não sobrescreve o aberto).
     this.playbookId = null;
+    this.version = 1;
+    this.revisionCount = 0;
+    this.revisions = [];
     this.name = (doc.name || '').toString();
     this.description = (doc.description || '').toString();
     this.icon = (doc.icon || '📘').toString() || '📘';
+    this.publicationStatus = doc.status === 'published' ? 'published' : 'draft';
+    this.executionPolicy = {
+      final_synthesis: doc.execution_policy?.final_synthesis !== false,
+      require_stage_confirmation: !!doc.execution_policy?.require_stage_confirmation,
+      stop_on_error: doc.execution_policy?.stop_on_error !== false,
+    };
     this.nodes = nodes;
     this.edges = edges;
     this.suggestions = suggestions;
     this.selectedId = nodes.find((n) => n.is_root)?.id ?? nodes[0].id ?? null;
     this.tab = 'canvas';
     this.warnings = [];
+    this.validationStages = [];
     this.fitView();
     this.status = '📥 Playbook importado — revise e clique em Salvar para gravar.';
   }

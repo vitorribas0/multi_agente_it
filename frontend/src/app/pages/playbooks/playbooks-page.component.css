@@ -79,6 +79,15 @@
 .pb-card-head { display: flex; align-items: center; gap: 10px; }
 .pb-card-icon { font-size: 22px; }
 .pb-card-name { font-weight: 600; font-size: 15px; color: var(--text-primary); }
+.pb-card-status {
+  margin-left: auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.pb-card-status.published { background: var(--accent-dim); color: var(--accent-3); }
 .pb-card-desc {
   font-size: 13px;
   color: var(--text-secondary);

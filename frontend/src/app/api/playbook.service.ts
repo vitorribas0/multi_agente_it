@@ -4,9 +4,11 @@ import { Observable } from 'rxjs';
 
 import {
   PlaybookDetail,
+  PlaybookRevision,
   PlaybookSavePayload,
   PlaybookSummary,
   PlaybookWriteResult,
+  PlaybookValidationResult,
 } from './playbook.models';
 
 // Serviço da feature Playbooks. Fala com /api/playbooks/*. Os POSTs mandam
@@ -15,8 +17,9 @@ import {
 export class PlaybookService {
   constructor(private http: HttpClient) {}
 
-  list(): Observable<{ status: string; playbooks: PlaybookSummary[] }> {
-    return this.http.get<{ status: string; playbooks: PlaybookSummary[] }>('/api/playbooks/');
+  list(publishedOnly = false): Observable<{ status: string; playbooks: PlaybookSummary[] }> {
+    const suffix = publishedOnly ? '?published_only=1' : '';
+    return this.http.get<{ status: string; playbooks: PlaybookSummary[] }>(`/api/playbooks/${suffix}`);
   }
 
   get(id: number): Observable<{ status: string; playbook: PlaybookDetail }> {
@@ -29,6 +32,23 @@ export class PlaybookService {
 
   update(id: number, payload: PlaybookSavePayload): Observable<PlaybookWriteResult> {
     return this.http.post<PlaybookWriteResult>(`/api/playbooks/${id}/update/`, payload);
+  }
+
+  validate(payload: PlaybookSavePayload): Observable<PlaybookValidationResult> {
+    return this.http.post<PlaybookValidationResult>('/api/playbooks/validate/', payload);
+  }
+
+  revisions(id: number): Observable<{ status: string; revisions: PlaybookRevision[] }> {
+    return this.http.get<{ status: string; revisions: PlaybookRevision[] }>(
+      `/api/playbooks/${id}/revisions/`,
+    );
+  }
+
+  restore(id: number, version: number): Observable<PlaybookWriteResult> {
+    return this.http.post<PlaybookWriteResult>(
+      `/api/playbooks/${id}/revisions/${version}/restore/`,
+      {},
+    );
   }
 
   delete(id: number): Observable<{ status: string; message?: string }> {

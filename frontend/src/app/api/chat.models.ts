@@ -196,7 +196,7 @@ export interface ChatProgressEvent {
 
 export interface CodexPlanItem {
   step: string;
-  status: 'pending' | 'inProgress' | 'completed';
+  status: 'pending' | 'inProgress' | 'completed' | 'failed' | 'skipped';
 }
 
 export interface CodexPlanEvent {

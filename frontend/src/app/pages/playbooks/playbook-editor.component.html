@@ -7,10 +7,16 @@
       <input class="pb-desc-input" [(ngModel)]="description" placeholder="Descrição curta (opcional)" />
     </div>
     <div class="pb-ed-actions">
+      <select class="pb-publication" [(ngModel)]="publicationStatus" title="Estado desta versão">
+        <option value="draft">Rascunho</option>
+        <option value="published">Publicado</option>
+      </select>
+      <span class="pb-version">v{{ version }}</span>
       <span class="pb-status" *ngIf="status">{{ status }}</span>
       <button class="pb-btn ghost" (click)="triggerImport()" title="Importar playbook de um arquivo .json">📥 Importar</button>
       <button class="pb-btn ghost" (click)="exportJson()" title="Exportar este playbook como .json">⬇️ Exportar</button>
       <button class="pb-btn ghost" (click)="close()">Voltar</button>
+      <button class="pb-btn ghost" [disabled]="validating" (click)="validate()">✓ Validar</button>
       <button class="pb-btn primary" [disabled]="saving" (click)="save()">💾 Salvar</button>
     </div>
     <!-- Input escondido usado pelo Importar -->
@@ -25,6 +31,9 @@
 
   <div class="pb-ed-tabs">
     <button [class.active]="tab === 'canvas'" (click)="tab = 'canvas'">🕸️ Orquestração</button>
+    <button [class.active]="tab === 'execution'" (click)="tab = 'execution'">
+      ▶ Execução e versões
+    </button>
     <button [class.active]="tab === 'suggestions'" (click)="tab = 'suggestions'">
       💡 Sugestões ({{ suggestions.length }})
     </button>
@@ -101,7 +110,11 @@
               <span class="pb-node-name">{{ n.name }}</span>
               <span class="pb-node-badge" *ngIf="n.is_root">root</span>
             </div>
-            <div class="pb-node-model">{{ n.model }} · {{ n.tools_enabled.length }} tools</div>
+            <div class="pb-node-model" *ngIf="n.is_root">Regras globais · orquestrador</div>
+            <div class="pb-node-model" *ngIf="!n.is_root">
+              {{ n.skills_enabled.length }} skill(s)
+              <span *ngIf="n.requires_approval"> · requer aprovação</span>
+            </div>
             <!-- Porta de saída: inicia uma ligação -->
             <button
               class="pb-node-port"
@@ -121,8 +134,8 @@
         </div>
       </div>
       <div class="pb-canvas-toolbar">
-        <button class="pb-btn ghost" (click)="addNode()">➕ Adicionar agente</button>
-        <span class="pb-hint">Arraste os cards para posicionar · ＋ na borda cria conexão · scroll = zoom · arraste o fundo = mover a tela</span>
+        <button class="pb-btn ghost" (click)="addNode()">➕ Adicionar etapa</button>
+        <span class="pb-hint">As conexões definem dependências. A Atena executa as etapas na ordem do grafo.</span>
       </div>
     </div>
 
@@ -130,45 +143,67 @@
     <aside class="pb-node-panel" *ngIf="selected as n; else noSel">
       <div class="pb-panel-row">
         <input class="pb-panel-icon" [(ngModel)]="n.icon" maxlength="4" />
-        <input class="pb-panel-name" [(ngModel)]="n.name" placeholder="Nome do agente" />
+        <input class="pb-panel-name" [(ngModel)]="n.name" [placeholder]="n.is_root ? 'Nome do orquestrador' : 'Nome da etapa'" />
       </div>
 
       <label class="pb-field">
-        <span>Descrição (o que ele faz — ajuda o orquestrador a delegar)</span>
-        <input [(ngModel)]="n.description" placeholder="Ex.: escreve e executa SQL na base FQ" />
+        <span>{{ n.is_root ? 'Finalidade do Playbook' : 'Objetivo desta etapa' }}</span>
+        <input [(ngModel)]="n.description" placeholder="Ex.: conciliar transações e registrar divergências" />
       </label>
 
       <label class="pb-field">
-        <span>Prompt do sistema</span>
-        <textarea rows="7" [(ngModel)]="n.system_prompt" placeholder="Instruções do agente…"></textarea>
+        <span>{{ n.is_root ? 'Regras globais do orquestrador' : 'Instruções específicas da etapa' }}</span>
+        <textarea rows="6" [(ngModel)]="n.system_prompt" placeholder="Critérios, limites, evidências e forma de trabalho…"></textarea>
       </label>
 
-      <div class="pb-field-grid">
-        <label class="pb-field">
-          <span>Modelo</span>
-          <select [(ngModel)]="n.model">
-            <option *ngFor="let m of models" [value]="m">{{ m }}</option>
-          </select>
-        </label>
-        <label class="pb-field">
-          <span>Temperatura: {{ n.temperature }}</span>
-          <input type="range" min="0" max="2" step="0.1" [(ngModel)]="n.temperature" />
-        </label>
-      </div>
+      <label class="pb-field" *ngIf="!n.is_root">
+        <span>Saída esperada</span>
+        <textarea rows="3" [(ngModel)]="n.expected_output" placeholder="Ex.: tabela conciliada, exceções e evidências utilizadas"></textarea>
+      </label>
 
       <div class="pb-field">
-        <span>Ferramentas</span>
-        <div class="pb-tools">
-          <label class="pb-tool" *ngFor="let t of tools; trackBy: trackTool"
-                 [title]="t.description">
-            <input type="checkbox" [checked]="isToolOn(n, t.slug)" (change)="toggleTool(n, t.slug)" />
-            <span>{{ t.icon }} {{ t.name }}</span>
+        <span>Skills aplicadas nesta {{ n.is_root ? 'orquestração' : 'etapa' }}</span>
+        <div class="pb-tools pb-skills" *ngIf="skills.length; else noSkills">
+          <label class="pb-tool" *ngFor="let skill of skills" [title]="skill.description || skill.slug">
+            <input type="checkbox" [checked]="isSkillOn(n, skill.slug)" (change)="toggleSkill(n, skill.slug)" />
+            <span>◆ {{ skill.name || skill.slug }}</span>
+          </label>
+        </div>
+        <ng-template #noSkills><small class="pb-empty-inline">Nenhuma skill cadastrada.</small></ng-template>
+      </div>
+
+      <div class="pb-stage-policy" *ngIf="!n.is_root">
+        <label class="pb-check"><input type="checkbox" [(ngModel)]="n.requires_approval" /> Aprovação antes de executar</label>
+        <label class="pb-check"><input type="checkbox" [(ngModel)]="n.allow_user_questions" /> Pode perguntar ao usuário</label>
+        <div class="pb-field-grid">
+          <label class="pb-field">
+            <span>Tentativas extras</span>
+            <select [(ngModel)]="n.max_retries">
+              <option [ngValue]="0">Nenhuma</option><option [ngValue]="1">1</option>
+              <option [ngValue]="2">2</option><option [ngValue]="3">3</option>
+            </select>
+          </label>
+          <label class="pb-field">
+            <span>Se falhar</span>
+            <select [(ngModel)]="n.on_error">
+              <option value="stop">Interromper fluxo</option>
+              <option value="continue">Continuar e registrar</option>
+            </select>
           </label>
         </div>
       </div>
 
+      <details class="pb-advanced">
+        <summary>Compatibilidade com o motor legado</summary>
+        <div class="pb-field-grid">
+          <label class="pb-field"><span>Modelo legado</span><select [(ngModel)]="n.model"><option *ngFor="let m of models" [value]="m">{{ m }}</option></select></label>
+          <label class="pb-field"><span>Temperatura: {{ n.temperature }}</span><input type="range" min="0" max="2" step="0.1" [(ngModel)]="n.temperature" /></label>
+        </div>
+        <div class="pb-field"><span>Tools legadas</span><div class="pb-tools"><label class="pb-tool" *ngFor="let t of tools; trackBy: trackTool" [title]="t.description"><input type="checkbox" [checked]="isToolOn(n, t.slug)" (change)="toggleTool(n, t.slug)" /><span>{{ t.icon }} {{ t.name }}</span></label></div></div>
+      </details>
+
       <div class="pb-field" *ngIf="outgoingOf(n.id!).length">
-        <span>Pode delegar para</span>
+        <span>Fluxo segue para</span>
         <div class="pb-out-edges">
           <span class="pb-out-edge" *ngFor="let e of outgoingOf(n.id!); trackBy: trackEdge">
             → {{ nodeName(e.target) }}
@@ -184,9 +219,41 @@
     </aside>
     <ng-template #noSel>
       <aside class="pb-node-panel empty">
-        <p>Selecione um agente no canvas para editar o prompt, o modelo e as ferramentas.</p>
+        <p>Selecione o orquestrador ou uma etapa para configurar regras, skills e saídas.</p>
       </aside>
     </ng-template>
+  </div>
+
+  <!-- ── Aba execução e versões ───────────────────────────────────── -->
+  <div class="pb-ed-body execution" *ngIf="!loading && tab === 'execution'">
+    <section class="pb-exec-card">
+      <div class="pb-section-head"><div><h2>Comportamento da execução</h2><p>Estas regras são congeladas no início de cada trabalho.</p></div><span class="pb-version large">v{{ version }}</span></div>
+      <label class="pb-check"><input type="checkbox" [(ngModel)]="executionPolicy.final_synthesis" /> Gerar síntese final reunindo os resultados das etapas</label>
+      <label class="pb-check"><input type="checkbox" [(ngModel)]="executionPolicy.require_stage_confirmation" /> Pedir aprovação antes de todas as etapas</label>
+      <label class="pb-check"><input type="checkbox" [(ngModel)]="executionPolicy.stop_on_error" /> Interromper ao encontrar falha, salvo exceção configurada na etapa</label>
+      <button class="pb-btn primary" [disabled]="validating" (click)="validate()">✓ Validar ordem e prontidão</button>
+    </section>
+
+    <section class="pb-exec-card">
+      <div class="pb-section-head"><div><h2>Ordem de execução validada</h2><p>Resultado real das dependências desenhadas no canvas.</p></div></div>
+      <div class="pb-validation-empty" *ngIf="!validationStages.length">Clique em <strong>Validar</strong> para conferir o fluxo antes de publicar.</div>
+      <div class="pb-stage-list" *ngIf="validationStages.length">
+        <div class="pb-stage-row" *ngFor="let stage of validationStages; let i = index">
+          <span class="pb-stage-number">{{ i + 1 }}</span>
+          <div><strong>{{ stage.name }}</strong><small>{{ stage.skills.length ? stage.skills.join(' · ') : 'Sem skill obrigatória' }}</small></div>
+          <span class="pb-stage-gate" *ngIf="stage.requires_approval">aprovação</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="pb-exec-card">
+      <div class="pb-section-head"><div><h2>Histórico de versões</h2><p>Cada salvamento cria um snapshot auditável. Restaurar nunca apaga o histórico.</p></div><span>{{ revisionCount }} revisão(ões)</span></div>
+      <div class="pb-validation-empty" *ngIf="!revisions.length">Salve o Playbook para criar a primeira versão.</div>
+      <div class="pb-revision-row" *ngFor="let revision of revisions">
+        <div><strong>v{{ revision.version }}</strong><small>{{ revision.created_at | date:'dd/MM/yyyy HH:mm' }} · {{ revision.status === 'published' ? 'Publicado' : 'Rascunho' }}</small></div>
+        <button class="pb-btn ghost sm" [disabled]="restoring || revision.version === version" (click)="restoreRevision(revision)">{{ revision.version === version ? 'Atual' : 'Restaurar' }}</button>
+      </div>
+    </section>
   </div>
 
   <!-- ── Aba sugestões ─────────────────────────────────────────────── -->

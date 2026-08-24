@@ -6,7 +6,7 @@
         <div>
           <h2 class="sa-modal-title">Playbooks</h2>
           <p class="sa-modal-sub kb-modal-sub">
-            Selecione um pipeline para conversar só com ele — isolado dos agentes globais
+            Selecione um fluxo publicado para a Atena executar por etapas
           </p>
         </div>
       </div>
@@ -45,13 +45,13 @@
           <span class="pb-pick-icon">{{ pb.icon }}</span>
           <span class="pb-pick-meta">
             <span class="pb-pick-name">{{ pb.name }}</span>
-            <span class="pb-pick-desc">{{ pb.description || (pb.node_count + ' agente(s)') }}</span>
+            <span class="pb-pick-desc">{{ pb.description || (pb.stage_count + ' etapa(s)') }} · v{{ pb.version }}</span>
           </span>
           <span class="pb-pick-check" *ngIf="isActive(pb.id)">✓</span>
         </button>
 
         <div class="kb-empty" *ngIf="loaded && !loading && !playbooks.length">
-          Nenhum playbook cadastrado. Crie um na tela <strong>📐 Playbooks</strong>.
+          Nenhum Playbook publicado. Revise e publique um na tela <strong>📐 Playbooks</strong>.
         </div>
       </div>
     </div>

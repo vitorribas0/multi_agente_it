@@ -1120,6 +1120,9 @@ body.html-preview-open:not(.html-preview-full) .main {
 .agent-plan-step.plan-done .agent-plan-icon {
   color: #22c55e;
 }
+.agent-plan-step.plan-failed { color: #fca5a5; }
+.agent-plan-step.plan-failed .agent-plan-icon { color: #ef4444; }
+.agent-plan-step.plan-skipped { opacity: .58; text-decoration: line-through; }
 
 @keyframes planPulse {
   50% { opacity: .35; transform: scale(.8); }

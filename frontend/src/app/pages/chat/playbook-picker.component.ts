@@ -47,7 +47,7 @@ export class PlaybookPickerComponent implements OnChanges {
 
   private fetch(): void {
     this.loading = true;
-    this.api.list().subscribe({
+    this.api.list(true).subscribe({
       next: (data) => {
         this.playbooks = data.playbooks || [];
         this.loaded = true;

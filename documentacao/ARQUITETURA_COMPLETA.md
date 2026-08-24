@@ -57,6 +57,40 @@ isolado e utiliza as skills de `.agents/skills/`.
 O motor anterior em `auditor/ai_service.py` e `tools/` permanece como backend de
 compatibilidade para os endpoints legados de agente; ele não renderiza frontend.
 
+## Playbooks executáveis
+
+Playbook não é apenas um prompt nem uma decoração do chat. Ele é o contrato de
+execução do worker Atena/Codex:
+
+- o nó `root` define as regras globais do orquestrador;
+- os demais nós são etapas com objetivo, instruções e saída esperada;
+- as arestas representam dependências e formam um DAG validado sem ciclos;
+- skills do root são herdadas pelas etapas e skills da etapa especializam o
+  trabalho;
+- cada etapa pode exigir aprovação, permitir ou impedir perguntas, repetir em
+  falha e escolher entre interromper ou continuar;
+- a política global controla confirmação por etapa, interrupção em falha e
+  síntese final.
+
+Ao enfileirar um turno, a API guarda `_playbook_snapshot` dentro de
+`Execution.request_payload`. Esse snapshot contém nome, versão, grafo, skills e
+políticas. O worker percorre a ordem topológica no mesmo thread Codex e persiste
+o plano (`inProgress`, `completed` ou `failed`) depois de cada etapa. Os handoffs
+das etapas entram no contexto da próxima; ao final, o orquestrador consolida a
+resposta quando a síntese está habilitada.
+
+Cada salvamento cria `PlaybookRevision`. Restaurar uma versão cria outra versão
+em vez de sobrescrever o histórico. Assim, a versão mostrada no chat é
+rastreável e uma edição durante a execução não muda o trabalho em andamento.
+
+```mermaid
+flowchart LR
+    R[Root: regras globais] --> A[Etapa 1: skills + saída]
+    A --> B{Aprovação?}
+    B --> C[Etapa 2: handoff anterior]
+    C --> D[Síntese final]
+```
+
 ## Ciclo durável de uma execução
 
 ```mermaid
@@ -68,10 +102,10 @@ sequenceDiagram
     participant CX as Codex
 
     UI->>API: POST /api/codex/chat/stream/
-    API->>DB: cria Execution queued + mensagem
+    API->>DB: cria Execution queued + mensagem + snapshot do Playbook
     API-->>UI: conversation_id + execution_id
     WK->>DB: reivindica a execução
-    WK->>CX: inicia/retoma o turno
+    WK->>CX: inicia/retoma o thread e executa cada etapa
     CX-->>WK: plano, tools e texto
     WK->>DB: persiste eventos e heartbeat
     UI->>API: consulta Execution

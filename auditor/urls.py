@@ -71,9 +71,16 @@ urlpatterns = [
 
     # Playbooks (pipelines multi-agente autorados no canvas)
     path("api/playbooks/", views.playbook_list, name="playbook_list"),
+    path("api/playbooks/validate/", views.playbook_validate, name="playbook_validate"),
     path("api/playbooks/create/", views.playbook_create, name="playbook_create"),
     path("api/playbooks/<int:pb_id>/", views.playbook_detail, name="playbook_detail"),
     path("api/playbooks/<int:pb_id>/update/", views.playbook_update, name="playbook_update"),
+    path("api/playbooks/<int:pb_id>/revisions/", views.playbook_revisions, name="playbook_revisions"),
+    path(
+        "api/playbooks/<int:pb_id>/revisions/<int:version>/restore/",
+        views.playbook_revision_restore,
+        name="playbook_revision_restore",
+    ),
     path("api/playbooks/<int:pb_id>/delete/", views.playbook_delete, name="playbook_delete"),
     path("api/conversations/<int:conv_id>/playbook/save/", views.conversation_playbook_save, name="conversation_playbook_save"),
 

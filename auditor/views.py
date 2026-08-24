@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.http import JsonResponse, FileResponse, Http404, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -14,7 +15,12 @@ from pathlib import Path
 from .ai_service import run_agent, request_stop, register_stop, clear_stop, MODEL_OPTIONS
 from .models import (
     Conversation, Execution, Message, ToolCall, Agent, SessionAgent, AppSettings,
-    Knowledge, Playbook,
+    Knowledge, Playbook, PlaybookRevision,
+)
+from .playbook_runtime import (
+    normalize_execution_policy,
+    ordered_playbook_nodes,
+    snapshot_for_playbook,
 )
 from tools import all_tools
 
@@ -879,12 +885,17 @@ def config_agent_save(request, slug):
 # ── Playbooks (pipelines multi-agente autorados no canvas) ───────────
 
 def _playbook_summary(p: Playbook) -> dict:
+    stages = [node for node in (p.nodes or []) if not node.get("is_root")]
     return {
         "id": p.id,
         "name": p.name,
         "description": p.description,
         "icon": p.icon,
+        "status": p.status,
+        "version": p.version,
         "node_count": len(p.nodes or []),
+        "stage_count": len(stages) or (1 if p.nodes else 0),
+        "revision_count": p.revisions.count(),
     }
 
 
@@ -894,9 +905,13 @@ def _playbook_detail(p: Playbook) -> dict:
         "name": p.name,
         "description": p.description,
         "icon": p.icon,
+        "status": p.status,
+        "version": p.version,
+        "execution_policy": normalize_execution_policy(p.execution_policy),
         "nodes": p.nodes or [],
         "edges": p.edges or [],
         "suggestions": p.suggestions or [],
+        "revision_count": p.revisions.count(),
     }
 
 
@@ -922,6 +937,10 @@ def _normalize_playbook_graph(payload: dict) -> tuple[dict, list]:
         raise ValueError("O playbook precisa de ao menos um nó.")
 
     valid_tools = _valid_tool_slugs()
+    valid_skills = {
+        path.parent.name
+        for path in (Path(settings.BASE_DIR) / ".agents" / "skills").glob("*/SKILL.md")
+    }
     warnings: list[str] = []
 
     # 1) Canoniza slugs. O cliente identifica cada nó por 'id' (para casar as
@@ -949,6 +968,14 @@ def _normalize_playbook_graph(payload: dict) -> tuple[dict, list]:
         if model not in MODEL_OPTIONS:
             raise ValueError(f"Modelo inválido no nó '{n.get('name') or slug}': {model}.")
         tools_enabled = [s for s in (n.get("tools_enabled") or []) if s in valid_tools]
+        raw_skills = [str(s) for s in (n.get("skills_enabled") or []) if str(s)]
+        skills_enabled = [slug for slug in raw_skills if slug in valid_skills]
+        invalid_skills = sorted(set(raw_skills) - valid_skills)
+        if invalid_skills:
+            warnings.append(
+                f"Nó '{n.get('name') or slug}' ignorou skills inexistentes: "
+                + ", ".join(invalid_skills)
+            )
         try:
             temperature = max(0.0, min(2.0, float(n.get("temperature", 0.7))))
         except (TypeError, ValueError):
@@ -957,6 +984,13 @@ def _normalize_playbook_graph(payload: dict) -> tuple[dict, list]:
         if is_root:
             root_count += 1
         canvas = n.get("canvas") if isinstance(n.get("canvas"), dict) else {}
+        try:
+            max_retries = max(0, min(3, int(n.get("max_retries", 0))))
+        except (TypeError, ValueError):
+            max_retries = 0
+        on_error = str(n.get("on_error") or "stop")
+        if on_error not in {"stop", "continue"}:
+            on_error = "stop"
         nodes.append({
             "slug": slug,
             "name": (str(n.get("name") or slug))[:80],
@@ -966,6 +1000,12 @@ def _normalize_playbook_graph(payload: dict) -> tuple[dict, list]:
             "model": model,
             "temperature": temperature,
             "tools_enabled": tools_enabled,
+            "skills_enabled": skills_enabled,
+            "expected_output": str(n.get("expected_output") or "")[:4000],
+            "requires_approval": bool(n.get("requires_approval")),
+            "allow_user_questions": bool(n.get("allow_user_questions", True)),
+            "max_retries": max_retries,
+            "on_error": on_error,
             "is_root": is_root,
             "canvas": {
                 "x": canvas.get("x", 0) if isinstance(canvas.get("x"), (int, float)) else 0,
@@ -1000,6 +1040,8 @@ def _normalize_playbook_graph(payload: dict) -> tuple[dict, list]:
     adjacency: dict = {}
     for e in edges:
         adjacency.setdefault(e["source"], []).append(e["target"])
+    if any(e["target"] == root_slug for e in edges):
+        raise ValueError("O nó root não pode depender de outra etapa.")
     reachable = {root_slug}
     frontier = [root_slug]
     while frontier:
@@ -1015,12 +1057,39 @@ def _normalize_playbook_graph(payload: dict) -> tuple[dict, list]:
             f"Nós inalcançáveis a partir do root: {nomes}. Conecte-os com arestas."
         )
 
-    # 4) Avisos não-fatais: call_agent habilitado sem arestas de saída.
+    # 4) Ciclos: alcançabilidade sozinha não detecta A → B → A. O worker
+    # executa um DAG; dependências circulares são um erro de autoria.
+    indegree = {slug: 0 for slug in node_slugs}
+    for edge in edges:
+        indegree[edge["target"]] += 1
+    ready = [slug for slug, degree in indegree.items() if degree == 0]
+    visited = 0
+    while ready:
+        current = ready.pop()
+        visited += 1
+        for target in adjacency.get(current, []):
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+    if visited != len(node_slugs):
+        raise ValueError("O Playbook contém um ciclo entre etapas.")
+
+    # 5) Avisos de autoria: não impedem rascunhos, mas evitam publicar um fluxo
+    # pouco útil sem perceber.
     for n in nodes:
         if "call_agent" in n["tools_enabled"] and not adjacency.get(n["slug"]):
             warnings.append(
                 f"Nó '{n['name']}' tem call_agent habilitado mas nenhuma aresta de saída."
             )
+        if not n["is_root"] and not n["system_prompt"].strip() and not n["description"].strip():
+            warnings.append(f"Etapa '{n['name']}' ainda não possui objetivo ou instruções.")
+        if not n["is_root"] and not n["expected_output"].strip():
+            warnings.append(f"Etapa '{n['name']}' ainda não declara a saída esperada.")
+
+    if len(nodes) == 1:
+        warnings.append(
+            "O Playbook possui somente o orquestrador; adicione etapas para aproveitar o fluxo guiado."
+        )
 
     suggestions = []
     for s in (payload.get("suggestions") or []):
@@ -1042,6 +1111,11 @@ def _apply_playbook_fields(p: Playbook, data: dict) -> list:
     p.name = name[:120]
     p.description = (str(data.get("description") or "")).strip()[:240]
     p.icon = (str(data.get("icon") or "📘")).strip()[:8] or "📘"
+    status = str(data.get("status") or "draft")
+    if status not in {"draft", "published"}:
+        raise ValueError("Status do Playbook inválido.")
+    p.status = status
+    p.execution_policy = normalize_execution_policy(data.get("execution_policy"))
     graph, warnings = _normalize_playbook_graph(data)
     p.nodes = graph["nodes"]
     p.edges = graph["edges"]
@@ -1049,10 +1123,21 @@ def _apply_playbook_fields(p: Playbook, data: dict) -> list:
     return warnings
 
 
+def _record_playbook_revision(p: Playbook) -> PlaybookRevision:
+    return PlaybookRevision.objects.create(
+        playbook=p,
+        version=p.version,
+        snapshot=snapshot_for_playbook(p),
+    )
+
+
 @require_GET
 def playbook_list(request):
     """Lista todos os playbooks cadastrados (resumo p/ pickers)."""
-    items = [_playbook_summary(p) for p in Playbook.objects.all()]
+    queryset = Playbook.objects.all()
+    if request.GET.get("published_only") in {"1", "true", "yes"}:
+        queryset = queryset.filter(status="published")
+    items = [_playbook_summary(p) for p in queryset]
     return JsonResponse({"status": "success", "playbooks": items})
 
 
@@ -1069,9 +1154,11 @@ def playbook_create(request):
     """Cria um novo playbook."""
     try:
         data = json.loads(request.body or "{}")
-        p = Playbook()
-        warnings = _apply_playbook_fields(p, data)
-        p.save()
+        with transaction.atomic():
+            p = Playbook(version=1)
+            warnings = _apply_playbook_fields(p, data)
+            p.save()
+            _record_playbook_revision(p)
         return JsonResponse({
             "status": "success",
             "playbook": _playbook_detail(p),
@@ -1087,20 +1174,103 @@ def playbook_create(request):
 @require_http_methods(["POST"])
 def playbook_update(request, pb_id):
     """Atualiza um playbook existente."""
-    p = get_object_or_404(Playbook, id=pb_id)
     try:
         data = json.loads(request.body or "{}")
-        warnings = _apply_playbook_fields(p, data)
-        p.save()
+        with transaction.atomic():
+            p = Playbook.objects.select_for_update().get(pk=pb_id)
+            warnings = _apply_playbook_fields(p, data)
+            p.version += 1
+            p.save()
+            _record_playbook_revision(p)
         return JsonResponse({
             "status": "success",
             "playbook": _playbook_detail(p),
             "warnings": warnings,
         })
+    except Playbook.DoesNotExist:
+        return JsonResponse({"status": "error", "message": "Playbook não encontrado."}, status=404)
     except ValueError as e:
         return JsonResponse({"status": "error", "message": str(e)}, status=400)
     except Exception as e:
         return JsonResponse({"status": "error", "message": str(e)}, status=400)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def playbook_validate(request):
+    """Valida um rascunho sem persistir e devolve a ordem real das etapas."""
+    try:
+        data = json.loads(request.body or "{}")
+        candidate = Playbook(version=1)
+        warnings = _apply_playbook_fields(candidate, data)
+        snapshot = {
+            "nodes": candidate.nodes,
+            "edges": candidate.edges,
+        }
+        stages = ordered_playbook_nodes(snapshot)
+        return JsonResponse({
+            "status": "success",
+            "valid": True,
+            "warnings": warnings,
+            "stages": [
+                {
+                    "slug": stage.get("slug"),
+                    "name": stage.get("name"),
+                    "requires_approval": bool(stage.get("requires_approval")),
+                    "skills": stage.get("skills_enabled") or [],
+                }
+                for stage in stages
+            ],
+        })
+    except ValueError as exc:
+        return JsonResponse(
+            {"status": "error", "valid": False, "message": str(exc)},
+            status=400,
+        )
+    except Exception as exc:
+        return JsonResponse(
+            {"status": "error", "valid": False, "message": str(exc)},
+            status=400,
+        )
+
+
+@require_GET
+def playbook_revisions(_request, pb_id):
+    p = get_object_or_404(Playbook, id=pb_id)
+    return JsonResponse({
+        "status": "success",
+        "revisions": [
+            {
+                "version": revision.version,
+                "status": revision.snapshot.get("status", "draft"),
+                "created_at": revision.created_at.isoformat(),
+            }
+            for revision in p.revisions.all()
+        ],
+    })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def playbook_revision_restore(request, pb_id, version):
+    """Restaura uma revisão como uma NOVA versão, preservando o histórico."""
+    try:
+        with transaction.atomic():
+            p = Playbook.objects.select_for_update().get(pk=pb_id)
+            revision = PlaybookRevision.objects.get(playbook=p, version=version)
+            warnings = _apply_playbook_fields(p, revision.snapshot or {})
+            p.version += 1
+            p.save()
+            _record_playbook_revision(p)
+        return JsonResponse({
+            "status": "success",
+            "playbook": _playbook_detail(p),
+            "warnings": warnings,
+        })
+    except (Playbook.DoesNotExist, PlaybookRevision.DoesNotExist):
+        return JsonResponse({"status": "error", "message": "Versão não encontrada."}, status=404)
+    except Exception as exc:
+        return JsonResponse({"status": "error", "message": str(exc)}, status=400)
 
 
 @csrf_exempt
@@ -1127,7 +1297,7 @@ def conversation_playbook_save(request, conv_id):
         if pb_id is None:
             conv.playbook = None
         else:
-            conv.playbook = get_object_or_404(Playbook, id=pb_id)
+            conv.playbook = get_object_or_404(Playbook, id=pb_id, status="published")
         conv.save(update_fields=["playbook", "updated_at"])
         return JsonResponse({"status": "success", "conversation": _conversation_summary(conv)})
     except Exception as e:
@@ -1153,7 +1323,7 @@ def _apply_playbook(conv, playbook_id) -> None:
             conv.playbook = None
             conv.save(update_fields=["playbook", "updated_at"])
         return
-    pb = Playbook.objects.filter(id=playbook_id).first()
+    pb = Playbook.objects.filter(id=playbook_id, status="published").first()
     if pb is not None and conv.playbook_id != pb.id:
         conv.playbook = pb
         conv.save(update_fields=["playbook", "updated_at"])

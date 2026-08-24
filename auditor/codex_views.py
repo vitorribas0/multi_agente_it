@@ -25,7 +25,17 @@ from django.views.decorators.http import require_GET, require_http_methods
 
 from .codex_app_server import CodexAppServer, CodexAppServerError
 from .models import Conversation, Execution, ExecutionInteraction, Message, ToolCall
-from .views import _message_payload, _resolve_conversation
+from .playbook_runtime import (
+    normalize_execution_policy,
+    ordered_playbook_nodes,
+    playbook_plan,
+    playbook_plan_explanation,
+    playbook_stage_prompt,
+    playbook_synthesis_prompt,
+    set_plan_stage,
+    snapshot_for_playbook,
+)
+from .views import _UNSET, _apply_playbook, _message_payload, _resolve_conversation
 from tools.gerar_html import gerar_html
 
 
@@ -1527,7 +1537,7 @@ def codex_chat_stream(request):
     worker_execution = getattr(request, "_codex_worker_execution", None)
     if worker_execution is not None:
         execution_record = Execution.objects.select_related(
-            "conversation__agent"
+            "conversation__agent", "conversation__playbook"
         ).get(pk=worker_execution.pk)
         conv = execution_record.conversation
         data = dict(execution_record.request_payload or {})
@@ -1561,6 +1571,33 @@ def codex_chat_stream(request):
         if error:
             return JsonResponse({"status": "error", "message": error}, status=400)
 
+        requested_playbook_id = data.get("playbook_id", _UNSET)
+        _apply_playbook(conv, requested_playbook_id)
+        conv = Conversation.objects.select_related("agent", "playbook").get(pk=conv.pk)
+        if (
+            requested_playbook_id is not _UNSET
+            and requested_playbook_id is not None
+            and str(conv.playbook_id) != str(requested_playbook_id)
+        ):
+            return JsonResponse({
+                "status": "error",
+                "code": "playbook_unavailable",
+                "message": "Playbook inexistente ou ainda não publicado.",
+            }, status=400)
+        if conv.playbook_id and conv.playbook.status != "published":
+            return JsonResponse({
+                "status": "error",
+                "code": "playbook_unpublished",
+                "message": "Este Playbook está em rascunho. Publique uma versão antes de executar.",
+            }, status=409)
+        playbook_snapshot = (
+            snapshot_for_playbook(conv.playbook) if conv.playbook_id else None
+        )
+        initial_plan = playbook_plan(playbook_snapshot) if playbook_snapshot else []
+        initial_plan_explanation = (
+            playbook_plan_explanation(playbook_snapshot) if playbook_snapshot else ""
+        )
+
         _recover_orphaned_local_executions(conv.id)
         active_execution = Execution.objects.filter(
             conversation=conv,
@@ -1584,6 +1621,7 @@ def codex_chat_stream(request):
             "message": text,
             "_old_thread_id": old_thread_id,
             "_prepared_prompt": prompt,
+            "_playbook_snapshot": playbook_snapshot,
         }
         now = timezone.now()
         try:
@@ -1594,13 +1632,9 @@ def codex_chat_stream(request):
                     backend="local-worker",
                     request_payload=persisted_payload,
                     last_heartbeat_at=now,
-                    events=[{
-                        "type": "progress",
-                        "stage": "queued",
-                        "icon": "⌛",
-                        "text": "Execução adicionada à fila local",
-                        "sequence": 1,
-                    }],
+                    plan=initial_plan,
+                    plan_explanation=initial_plan_explanation,
+                    events=[],
                 )
                 Message.objects.create(conversation=conv, role="user", content=text)
         except IntegrityError:
@@ -1648,8 +1682,15 @@ def codex_chat_stream(request):
         trace_started_at: dict[str, float] = {}
         trace_output: dict[str, str] = {}
         trace_completed: set[str] = set()
-        live_plan: list[dict] = []
-        live_plan_explanation = ""
+        playbook_snapshot = data.get("_playbook_snapshot")
+        if not isinstance(playbook_snapshot, dict) or not playbook_snapshot.get("nodes"):
+            playbook_snapshot = None
+        live_plan: list[dict] = (
+            playbook_plan(playbook_snapshot) if playbook_snapshot else []
+        )
+        live_plan_explanation = (
+            playbook_plan_explanation(playbook_snapshot) if playbook_snapshot else ""
+        )
         session_workspace: Path | None = None
 
         def finish_stopped() -> None:
@@ -1790,7 +1831,7 @@ def codex_chat_stream(request):
                     ):
                         if event["type"] == "delta" and event.get("phase") != "commentary":
                             parts.append(event["text"])
-                        elif event["type"] == "plan":
+                        elif event["type"] == "plan" and not playbook_snapshot:
                             live_plan = _normalize_live_plan(event.get("plan") or [])
                             live_plan_explanation = _sanitize_trace_text(
                                 event.get("explanation"), 1200
@@ -1858,7 +1899,9 @@ def codex_chat_stream(request):
                                             record["result"], _TRACE_RESULT_PREVIEW_LIMIT
                                         ),
                                     })
-                                    advanced_plan = _advance_live_plan(live_plan)
+                                    advanced_plan = (
+                                        None if playbook_snapshot else _advance_live_plan(live_plan)
+                                    )
                                     if advanced_plan is not None:
                                         live_plan = advanced_plan
                                         events.put({
@@ -1883,7 +1926,157 @@ def codex_chat_stream(request):
                         raise _CodexExecutionStopped()
                     return "".join(parts).strip()
 
-                answer = collect_turn(prompt)
+                if playbook_snapshot:
+                    policy = normalize_execution_policy(
+                        playbook_snapshot.get("execution_policy")
+                    )
+                    stages = ordered_playbook_nodes(playbook_snapshot)
+                    if not stages:
+                        stages = [
+                            node
+                            for node in (playbook_snapshot.get("nodes") or [])
+                            if isinstance(node, dict) and node.get("is_root")
+                        ][:1]
+                    stage_results: list[tuple[str, str]] = []
+                    total_stages = len(stages)
+
+                    for stage_index, stage in enumerate(stages):
+                        stage_name = str(
+                            stage.get("name") or stage.get("slug") or "Etapa"
+                        )
+                        live_plan = set_plan_stage(
+                            live_plan, stage_index, "inProgress"
+                        )
+                        events.put({
+                            "type": "plan",
+                            "explanation": live_plan_explanation,
+                            "plan": live_plan,
+                        })
+                        events.put({
+                            "type": "progress",
+                            "stage": "playbook_stage",
+                            "icon": str(stage.get("icon") or "◆"),
+                            "text": f"Etapa {stage_index + 1}/{total_stages} · {stage_name}",
+                        })
+
+                        requires_gate = bool(stage.get("requires_approval")) or bool(
+                            policy["require_stage_confirmation"]
+                        )
+                        if requires_gate:
+                            gate = _wait_for_interaction(
+                                conv,
+                                events,
+                                "item/tool/requestUserInput",
+                                {
+                                    "questions": [{
+                                        "id": "stage_gate",
+                                        "header": "Próxima etapa",
+                                        "question": (
+                                            f"Autoriza executar a etapa "
+                                            f"{stage_index + 1}/{total_stages}: {stage_name}?"
+                                        ),
+                                        "options": [
+                                            {
+                                                "label": "Aprovar",
+                                                "description": "Executar esta etapa agora.",
+                                            },
+                                            {
+                                                "label": "Cancelar",
+                                                "description": "Interromper o Playbook com segurança.",
+                                            },
+                                        ],
+                                    }],
+                                },
+                                execution_record=execution_record,
+                            )
+                            gate_answers = (
+                                gate.get("answers", {})
+                                .get("stage_gate", {})
+                                .get("answers", [])
+                            )
+                            gate_choice = str(gate_answers[0]).lower() if gate_answers else ""
+                            if "aprovar" not in gate_choice:
+                                raise _CodexExecutionStopped()
+
+                        handoff_context = prompt
+                        if stage_results:
+                            prior = "\n\n".join(
+                                f"Handoff de {name}:\n{result[:12000]}"
+                                for name, result in stage_results
+                            )
+                            handoff_context = f"{prompt}\n\n{prior}"
+                        stage_prompt = playbook_stage_prompt(
+                            playbook_snapshot,
+                            stage,
+                            stage_index,
+                            total_stages,
+                            handoff_context,
+                        )
+                        max_attempts = int(stage.get("max_retries") or 0) + 1
+                        stage_answer = ""
+                        stage_error: Exception | None = None
+                        for attempt in range(max_attempts):
+                            try:
+                                stage_answer = collect_turn(stage_prompt)
+                                stage_error = None
+                                break
+                            except CodexAppServerError as exc:
+                                stage_error = exc
+                                if attempt + 1 < max_attempts:
+                                    events.put({
+                                        "type": "progress",
+                                        "stage": "playbook_retry",
+                                        "icon": "↻",
+                                        "text": (
+                                            f"Repetindo {stage_name} "
+                                            f"({attempt + 2}/{max_attempts})"
+                                        ),
+                                    })
+                        if stage_error is not None:
+                            live_plan = set_plan_stage(live_plan, stage_index, "failed")
+                            events.put({
+                                "type": "plan",
+                                "explanation": live_plan_explanation,
+                                "plan": live_plan,
+                            })
+                            can_continue = (
+                                str(stage.get("on_error") or "stop") == "continue"
+                                or not policy["stop_on_error"]
+                            )
+                            if not can_continue:
+                                raise stage_error
+                            stage_results.append((
+                                stage_name,
+                                f"Etapa falhou e o fluxo prosseguiu: {stage_error}",
+                            ))
+                            continue
+
+                        live_plan = set_plan_stage(live_plan, stage_index, "completed")
+                        events.put({
+                            "type": "plan",
+                            "explanation": live_plan_explanation,
+                            "plan": live_plan,
+                        })
+                        stage_results.append((stage_name, stage_answer))
+
+                    if policy["final_synthesis"] and len(stage_results) > 1:
+                        events.put({
+                            "type": "progress",
+                            "stage": "playbook_synthesis",
+                            "icon": "◇",
+                            "text": "Consolidando os resultados do Playbook",
+                        })
+                        answer = collect_turn(
+                            playbook_synthesis_prompt(
+                                playbook_snapshot,
+                                text,
+                                stage_results,
+                            )
+                        )
+                    else:
+                        answer = stage_results[-1][1] if stage_results else ""
+                else:
+                    answer = collect_turn(prompt)
                 if execution.stop_event.is_set():
                     raise _CodexExecutionStopped()
                 if revision_html and _split_html_response(answer)[1] is None:

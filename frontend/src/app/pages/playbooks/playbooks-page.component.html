@@ -12,9 +12,8 @@
       <div>
         <h1 class="pb-page-title">📐 Playbooks</h1>
         <p class="pb-page-sub">
-          Pipelines multi-agente configuráveis. Desenhe uma árvore de orquestração no canvas,
-          defina prompts, modelos e ferramentas por agente — e selecione o playbook no chat para
-          conversar só com ele.
+          Fluxos executáveis da Atena. Organize etapas, aplique skills, defina aprovações e saídas
+          esperadas; cada execução usa uma versão imutável e mantém rastreabilidade.
         </p>
       </div>
       <button class="pb-btn primary" (click)="createNew()">➕ Novo playbook</button>
@@ -33,10 +32,13 @@
         <div class="pb-card-head">
           <span class="pb-card-icon">{{ pb.icon }}</span>
           <span class="pb-card-name">{{ pb.name }}</span>
+          <span class="pb-card-status" [class.published]="pb.status === 'published'">
+            {{ pb.status === 'published' ? 'Publicado' : 'Rascunho' }} · v{{ pb.version }}
+          </span>
         </div>
         <p class="pb-card-desc">{{ pb.description || 'Sem descrição.' }}</p>
         <div class="pb-card-foot">
-          <span class="pb-card-count">🕸️ {{ pb.node_count }} agente(s)</span>
+          <span class="pb-card-count">▶ {{ pb.stage_count }} etapa(s) · {{ pb.revision_count }} versão(ões)</span>
           <div class="pb-card-actions">
             <button class="pb-btn sm ghost" (click)="edit(pb); $event.stopPropagation()">Editar</button>
             <button class="pb-btn sm danger" (click)="remove(pb); $event.stopPropagation()">Excluir</button>

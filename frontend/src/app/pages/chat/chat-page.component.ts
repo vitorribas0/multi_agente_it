@@ -442,8 +442,8 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.typing = true;
     this.pushProgress({
       stage: 'thinking',
-      icon: '↻',
-      text: 'Conexão restabelecida pelo acompanhamento persistente',
+      icon: '◈',
+      text: 'Atena está preparando a execução…',
     });
     this.scheduleExecutionPoll(300);
     this.scrollSoon();
@@ -514,7 +514,10 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     // Placeholder imediato (nome do detalhe) enquanto o detalhe completo carrega.
-    this.activePlaybook = { id, name: name || 'Playbook', description: '', icon: '📐', node_count: 0 };
+    this.activePlaybook = {
+      id, name: name || 'Playbook', description: '', icon: '📐', node_count: 0,
+      stage_count: 0, status: 'draft', version: 1, revision_count: 0,
+    };
     this.playbookApi.get(id).subscribe({
       next: (res) => {
         const pb = res.playbook;
@@ -524,6 +527,10 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
           description: pb.description,
           icon: pb.icon || '📐',
           node_count: (pb.nodes || []).length,
+          stage_count: (pb.nodes || []).filter((node) => !node.is_root).length || 1,
+          status: pb.status,
+          version: pb.version,
+          revision_count: pb.revision_count,
         };
         this.playbookSuggestions = pb.suggestions || [];
       },
@@ -702,8 +709,19 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   planIcon(status: CodexPlanItem['status']): string {
     if (status === 'completed') return '✓';
+    if (status === 'failed') return '×';
+    if (status === 'skipped') return '–';
     if (status === 'inProgress') return '●';
     return '○';
+  }
+
+  get planProgressLabel(): string {
+    const current = this.livePlan.findIndex((item) => item.status === 'inProgress');
+    if (current >= 0) return `Etapa ${current + 1} de ${this.livePlan.length}`;
+    const completed = this.livePlan.filter((item) => item.status === 'completed').length;
+    return completed === this.livePlan.length && completed > 0
+      ? `${completed} etapas concluídas`
+      : `${completed} de ${this.livePlan.length}`;
   }
 
   async submitInteractionAnswers(): Promise<void> {
