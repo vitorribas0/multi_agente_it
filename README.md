@@ -26,7 +26,7 @@ e da arquitetura em [`documentacao/ARQUITETURA_COMPLETA.md`](documentacao/ARQUIT
 
 | Requisito | Detalhe |
 |---|---|
-| **Python** | 3.11+ (Django 6.0.5) |
+| **Python** | 3.11 (Django 5.2.17) |
 | **Node.js** | 18+ com npm (Angular 17) |
 | **Credenciais IaraGenAI** | `client_id` + `client_secret` (gateway de LLM) |
 | **Credenciais AWS** | access key / secret / session token — para o Athena |
