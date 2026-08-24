@@ -128,7 +128,7 @@
     </div>
   </header>
 
-  <div class="messages-area" #messagesArea>
+  <div class="messages-area" #messagesArea (scroll)="onMessagesScroll()">
     <!-- Estado de boas-vindas (some ao ter mensagens) -->
     <div class="welcome-state" *ngIf="!hasMessages">
       <div class="welcome-icon" [class.playbook-icon]="activePlaybook">

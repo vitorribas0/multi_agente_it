@@ -196,6 +196,9 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   private executionEventCursor = 0;
   private executionPollTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldScroll = false;
+  private followLatest = true;
+  private lastMessagesScrollTop = 0;
+  private readonly FOLLOW_LATEST_THRESHOLD = 64;
   private routeSub?: Subscription;
 
   constructor(
@@ -272,12 +275,16 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.activePlaybook = null;
     this.playbookSuggestions = [];
     this.pendingPlaybookId = undefined;
+    this.shouldScroll = false;
+    this.followLatest = true;
+    this.lastMessagesScrollTop = 0;
   }
 
   ngAfterViewChecked(): void {
     if (this.shouldScroll && this.messagesArea) {
       const el = this.messagesArea.nativeElement;
       el.scrollTop = el.scrollHeight;
+      this.lastMessagesScrollTop = el.scrollTop;
       this.shouldScroll = false;
     }
   }
@@ -290,8 +297,29 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.agents.find((a) => a.slug === this.selectedAgentSlug);
   }
 
-  private scrollSoon(): void {
-    this.shouldScroll = true;
+  onMessagesScroll(): void {
+    if (!this.messagesArea) return;
+    const el = this.messagesArea.nativeElement;
+    const scrollTop = el.scrollTop;
+    const distanceFromBottom = el.scrollHeight - scrollTop - el.clientHeight;
+    const userMovedUp = scrollTop < this.lastMessagesScrollTop - 1;
+
+    if (userMovedUp) {
+      // O usuário assumiu o controle para ler conteúdo anterior. Eventos do
+      // agente continuam chegando, mas não alteram mais a posição da tela.
+      this.followLatest = false;
+      this.shouldScroll = false;
+    } else if (distanceFromBottom <= this.FOLLOW_LATEST_THRESHOLD) {
+      // Ao voltar ao final, o acompanhamento automático é reativado.
+      this.followLatest = true;
+    }
+
+    this.lastMessagesScrollTop = scrollTop;
+  }
+
+  private scrollSoon(force = false): void {
+    if (force) this.followLatest = true;
+    if (this.followLatest) this.shouldScroll = true;
   }
 
   // ── Carga ────────────────────────────────────────────────────────
@@ -306,7 +334,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  private loadConversation(id: number, terminalError = ''): void {
+  private loadConversation(id: number, terminalError = '', forceScroll = true): void {
     this.stopExecutionPolling();
     this.chat.getConversation(id).subscribe({
       next: (data) => {
@@ -336,7 +364,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
           this.stopRequested = false;
           this.pendingInteraction = null;
         }
-        this.scrollSoon();
+        this.scrollSoon(forceScroll);
       },
       error: () => {},
     });
@@ -466,6 +494,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.loadConversation(
       conversationId,
       execution.status === 'failed' ? (execution.error || 'falha sem detalhe') : '',
+      false,
     );
   }
 
@@ -549,7 +578,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.interactionError = '';
     this.livePlan = [];
     this.livePlanExplanation = '';
-    this.scrollSoon();
+    this.scrollSoon(true);
 
     try {
       const data = await this.chat.stream(
@@ -951,7 +980,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.input = '';
     this.isLoading = true;
     this.uploading = `Carregando ${file.name}…`;
-    this.scrollSoon();
+    this.scrollSoon(true);
     try {
       const data = await this.chat.uploadTable(file, {
         conversationId: this.conversationId,
@@ -982,7 +1011,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.isLoading = true;
     const label = files.length === 1 ? files[0].name : `${files.length} documentos`;
     this.uploading = `Carregando ${label}…`;
-    this.scrollSoon();
+    this.scrollSoon(true);
     try {
       const data = await this.chat.uploadBatch(files, {
         conversationId: this.conversationId,
