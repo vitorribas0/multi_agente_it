@@ -1,8 +1,14 @@
-# Auditor Multi-Agentes (Playbook Tech Auditors)
+# Atena — Multi-Agentes de Auditoria
 
-Sistema de auditoria assistida por IA: um **backend Django** (motor multi-agente,
-tools, integração com o gateway IaraGenAI e Athena) servindo uma API, e um
-**front Angular** (`frontend/`) que consome essa API.
+Atena é uma aplicação de auditoria assistida por IA: um **backend Django**
+(motor multiagente, tools e Athena) servindo uma API, um worker de execução e
+um **front Angular** (`frontend/`) que consome essa API.
+
+Codex é o runtime agente da Atena; OpenAI e Iara são provedores possíveis de
+LLM, não nomes da aplicação. O caminho Atena/Codex atual usa OpenAI. As
+integrações Iara existentes permanecem restritas ao motor legado e às tools que
+já dependiam delas. A decisão arquitetural está detalhada em
+[`documentacao/ARQUITETURA_COMPLETA.md`](documentacao/ARQUITETURA_COMPLETA.md).
 
 O Angular é a única interface da aplicação. Django opera como API, Admin e
 backend do worker; ele não mantém um frontend paralelo.

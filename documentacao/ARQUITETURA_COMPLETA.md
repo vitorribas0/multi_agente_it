@@ -17,6 +17,42 @@ flowchart LR
     A -. polling .-> D
 ```
 
+## Decisão permanente: Atena, Codex e provedores de LLM
+
+As três camadas têm responsabilidades diferentes e não devem ser confundidas:
+
+```mermaid
+flowchart LR
+    U[Usuário] --> A[Atena: aplicação]
+    A --> C[Codex: runtime agente]
+    C --> P[Adaptador de modelo]
+    P --> O[API OpenAI]
+    P -. após homologação .-> I[SDK/gateway Iara]
+    C --> X[Sandbox, skills, tools e aprovações]
+```
+
+- **Atena** é o produto completo: Angular, Django, worker, conversas, arquivos,
+  playbooks, memória e experiência do usuário.
+- **Codex** é o runtime de agente incorporado à Atena. Ele coordena o ciclo de
+  execução, planos, skills, tools, sandbox, arquivos, perguntas e aprovações.
+- **OpenAI** fornece LLMs diretamente por sua API.
+- **Iara** é o canal corporativo governado pelo Itaú. Seu SDK/gateway pode
+  oferecer diferentes modelos e provedores por trás de uma interface interna.
+
+A arquitetura-alvo é independente do provedor: trocar OpenAI por Iara deve
+alterar somente o adaptador de modelo. O restante da Atena e do runtime Codex
+deve continuar igual.
+
+Essa independência exige compatibilidade real, não apenas conceitual. Antes de
+habilitar um provedor no Codex, é obrigatório homologar protocolo de respostas,
+streaming, chamadas de ferramentas, eventos, autenticação, erros, limites e o
+modelo escolhido. Um SDK que gera uma resposta textual não é, isoladamente,
+prova de que suporta todo o ciclo agente.
+
+**Estado atual:** o caminho principal Atena/Codex utiliza OpenAI. Integrações
+Iara anteriores continuam disponíveis apenas no motor legado e em tools que já
+dependiam delas. Iara não está atualmente habilitado como provedor do Codex.
+
 ## Componentes
 
 ### Angular
