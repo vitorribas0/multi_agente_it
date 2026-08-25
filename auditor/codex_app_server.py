@@ -36,6 +36,12 @@ _AUTH_FINGERPRINT_FILENAME = ".atena-openai-key.sha256"
 _DEFAULT_MODEL = "gpt-5.6-terra"
 _DEFAULT_REASONING_EFFORT = "medium"
 
+# Provedor IARA (via adaptador Responses local). Ver readm_implementar_iara.md
+# e auditor/iara_adapter.py. Config gerada dinamicamente em runtime/codex_home.
+_IARA_PROVIDER_ID = "iara"
+_MANAGED_CONFIG_MARKER = "# managed-by: atena-iara"
+_MANAGED_CONFIG_FILENAME = "config.toml"
+
 
 def _env_timeout(name: str, default: int, minimum: int) -> int:
     try:
@@ -87,12 +93,150 @@ def _bundled_codex_runtime() -> tuple[Path, Path | None]:
     return executable, Path(runtime_path).resolve() if runtime_path else None
 
 
+# ── Provedor IARA (opcional, gated por ATENA_IARA_ENABLED) ───────────────
+
+_iara_adapter_started = False
+_iara_adapter_lock = threading.Lock()
+
+
+def _iara_enabled() -> bool:
+    return (os.environ.get("ATENA_IARA_ENABLED") or "").strip().lower() in {
+        "1", "true", "yes", "on", "sim",
+    }
+
+
+def _iara_adapter_host_port() -> tuple[str, int]:
+    host = (os.environ.get("ATENA_IARA_ADAPTER_HOST") or "127.0.0.1").strip()
+    try:
+        port = int(os.environ.get("ATENA_IARA_ADAPTER_PORT") or "8799")
+    except ValueError:
+        port = 8799
+    return host, port
+
+
+def _iara_adapter_base_url() -> str:
+    host, port = _iara_adapter_host_port()
+    return f"http://{host}:{port}/v1"
+
+
+def _ensure_iara_adapter_running() -> None:
+    """Sobe o adaptador Responses⇄IARA uma vez por processo (idempotente).
+
+    Se a porta já estiver em uso (adaptador iniciado externamente ou por outra
+    thread), assume que está no ar e segue — o Codex se conecta via HTTP.
+    """
+    global _iara_adapter_started
+    with _iara_adapter_lock:
+        if _iara_adapter_started:
+            return
+        host, port = _iara_adapter_host_port()
+        try:
+            from auditor.iara_adapter import start_in_thread
+
+            start_in_thread(host, port)
+        except OSError:
+            # Porta ocupada => provavelmente já rodando; não é erro fatal.
+            pass
+        except Exception as exc:  # import/config inesperada
+            raise CodexAppServerError(
+                "Não foi possível iniciar o adaptador IARA local."
+            ) from exc
+        _iara_adapter_started = True
+
+
+def _managed_config_path(codex_home: Path) -> Path:
+    return codex_home / _MANAGED_CONFIG_FILENAME
+
+
+def _toml_key(value: str) -> str:
+    """Formata ``value`` como chave TOML entre aspas.
+
+    Usa string literal (aspas simples) por padrão — essencial em Windows, onde
+    ``C:\\Users\\...`` tem barras invertidas que quebrariam uma string básica.
+    Só cai para string básica (com escape) se o valor contiver aspas simples.
+    """
+    if "'" not in value:
+        return f"'{value}'"
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _write_iara_provider_config(codex_home: Path, project_cwd: Path) -> None:
+    """Escreve config.toml apontando o Codex para o adaptador IARA local.
+
+    O arquivo é totalmente gerenciado pela Atena (marcado no cabeçalho); só é
+    sobrescrito/removido quando tem o marcador, preservando um config manual.
+
+    Também declara o projeto (``project_cwd``) como ``trusted``. O Codex é
+    lançado com esse mesmo ``cwd``; se a confiança já estiver no config ele não
+    precisa reescrever o arquivo por conta própria — o que apagaria o marcador
+    e derrubaria a próxima inicialização com "config existe e não é gerenciado".
+    """
+    token = (os.environ.get("ATENA_IARA_ADAPTER_TOKEN") or "").strip()
+    lines = [
+        _MANAGED_CONFIG_MARKER + " — gerado automaticamente; não edite à mão.",
+        f'model = "{_configured_model()}"',
+        f'model_provider = "{_IARA_PROVIDER_ID}"',
+        f'model_reasoning_effort = "{_configured_reasoning_effort()}"',
+        "",
+        f"[model_providers.{_IARA_PROVIDER_ID}]",
+        'name = "IARA GenAI (adaptador local)"',
+        f'base_url = "{_iara_adapter_base_url()}"',
+        'wire_api = "responses"',
+        # Resiliência: retenta stream/request interrompidos e tolera janelas
+        # longas sem bytes (modelos com raciocínio demoram a emitir a saída).
+        "request_max_retries = 2",
+        "stream_max_retries = 2",
+        "stream_idle_timeout_ms = 300000",
+        "",
+        f"[projects.{_toml_key(str(project_cwd))}]",
+        'trust_level = "trusted"',
+    ]
+    if token:
+        # Codex envia Authorization: Bearer $ATENA_IARA_ADAPTER_TOKEN.
+        lines.insert(9, 'env_key = "ATENA_IARA_ADAPTER_TOKEN"')
+    content = "\n".join(lines) + "\n"
+
+    config_path = _managed_config_path(codex_home)
+    if config_path.exists():
+        existing = config_path.read_text(encoding="utf-8", errors="replace")
+        if _MANAGED_CONFIG_MARKER not in existing.splitlines()[:1] and \
+                _MANAGED_CONFIG_MARKER not in existing[:120]:
+            raise CodexAppServerError(
+                f"{config_path} existe e não é gerenciado pela Atena; "
+                "remova-o ou desative ATENA_IARA_ENABLED."
+            )
+    config_path.write_text(content, encoding="utf-8")
+    try:
+        config_path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _remove_managed_config(codex_home: Path) -> None:
+    """Remove o config.toml gerenciado (caminho OpenAI). Preserva config manual."""
+    config_path = _managed_config_path(codex_home)
+    try:
+        if not config_path.is_file():
+            return
+        head = config_path.read_text(encoding="utf-8", errors="replace")[:120]
+        if _MANAGED_CONFIG_MARKER in head:
+            config_path.unlink()
+    except OSError:
+        pass
+
+
 def codex_runtime_available() -> bool:
     """Indica se o runtime empacotado e uma autenticação possível existem."""
     try:
         _bundled_codex_runtime()
     except CodexAppServerError:
         return False
+    if _iara_enabled():
+        # No caminho IARA a autenticação é feita pelo SDK (client_id/secret).
+        return bool(
+            os.environ.get("IARA_CLIENT_ID") and os.environ.get("IARA_CLIENT_SECRET")
+        )
     codex_home = _codex_home_path()
     return bool(
         os.environ.get("OPENAI_API_KEY")
@@ -119,7 +263,26 @@ def _prepare_codex_home() -> Path:
     return codex_home
 
 
+def _thread_config() -> dict:
+    """Config passada em thread/start e thread/resume.
+
+    Com o provedor IARA usamos o adaptador em modo *passthrough* (repassa a
+    Responses API nativa para ``client.responses`` do SDK iaragenai), então as
+    ferramentas nativas do Codex — inclusive o ``functions.exec`` — funcionam
+    sem tradução e não é preciso mexer no "code mode".
+    """
+    return {"features.default_mode_request_user_input": True}
+
+
 def _configured_model() -> str:
+    if _iara_enabled():
+        # O id vai ao adaptador, que deriva o provider IARA a partir dele.
+        model = (
+            os.environ.get("IARA_MODEL")
+            or os.environ.get("ATENA_CODEX_MODEL")
+            or _DEFAULT_MODEL
+        )
+        return model.strip()
     return (os.environ.get("ATENA_CODEX_MODEL") or _DEFAULT_MODEL).strip()
 
 
@@ -165,6 +328,8 @@ def _ensure_api_key_auth(
             [str(executable), "login", "--with-api-key"],
             input=f"{api_key}\n",
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=process_env,
@@ -237,15 +402,29 @@ class CodexAppServer:
             [*path_entries, process_env.get("PATH", "")]
         )
         process_env["ATENA_PYTHON_EXECUTABLE"] = str(Path(sys.executable).resolve())
-        _ensure_api_key_auth(executable, process_env, codex_home)
+        if _iara_enabled():
+            # Provedor IARA: Codex fala com o adaptador Responses local, que
+            # traduz para o SDK iaragenai (autenticação via client_id/secret).
+            _ensure_iara_adapter_running()
+            _write_iara_provider_config(codex_home, self.cwd)
+        else:
+            # Caminho OpenAI padrão (default). Garante que uma config IARA
+            # gerenciada anterior não redirecione o Codex indevidamente.
+            _remove_managed_config(codex_home)
+            _ensure_api_key_auth(executable, process_env, codex_home)
+        # Canal binário: o protocolo JSONL do Codex exige UTF-8 estrito e linhas
+        # separadas por "\n". Em modo texto o Windows usaria a codepage local
+        # (cp1252) — quebrando em acentos/emojis ("stream did not contain valid
+        # UTF-8") — e traduziria "\n" em "\r\n", corrompendo o enquadramento.
+        # Fazemos encode/decode UTF-8 nós mesmos para um comportamento idêntico
+        # em Windows e Unix.
         self.process = subprocess.Popen(
             [str(executable), "app-server", "--listen", "stdio://"],
             cwd=str(self.cwd),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
+            bufsize=0,
             env=process_env,
         )
         self._stderr: list[str] = []
@@ -257,7 +436,8 @@ class CodexAppServer:
     def _drain_stderr(self) -> None:
         if not self.process.stderr:
             return
-        for line in self.process.stderr:
+        for raw in self.process.stderr:
+            line = raw.decode("utf-8", "replace")
             self._stderr.append(line.rstrip())
             if len(self._stderr) > 30:
                 self._stderr.pop(0)
@@ -268,8 +448,8 @@ class CodexAppServer:
             self._stdout_messages.put(self._stdout_closed)
             return
         try:
-            for line in self.process.stdout:
-                line = line.strip()
+            for raw in self.process.stdout:
+                line = raw.decode("utf-8", "replace").strip()
                 if not line:
                     continue
                 try:
@@ -284,7 +464,8 @@ class CodexAppServer:
             if self.process.poll() is not None or not self.process.stdin:
                 raise CodexAppServerError("Canal de entrada do Codex indisponível.")
             try:
-                self.process.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+                self.process.stdin.write(data)
                 self.process.stdin.flush()
             except (BrokenPipeError, OSError) as exc:
                 raise CodexAppServerError(
@@ -389,7 +570,7 @@ class CodexAppServer:
                     "approvalPolicy": _APPROVAL_POLICY,
                     "sandbox": "workspace-write",
                     "model": _configured_model(),
-                    "config": {"features.default_mode_request_user_input": True},
+                    "config": _thread_config(),
                     "developerInstructions": _DEVELOPER_INSTRUCTIONS,
                 },
             })
@@ -408,7 +589,7 @@ class CodexAppServer:
                 "approvalPolicy": _APPROVAL_POLICY,
                 "sandbox": "workspace-write",
                 "model": _configured_model(),
-                "config": {"features.default_mode_request_user_input": True},
+                "config": _thread_config(),
                 "developerInstructions": _DEVELOPER_INSTRUCTIONS,
             },
         })

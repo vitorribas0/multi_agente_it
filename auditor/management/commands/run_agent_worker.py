@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -13,6 +12,7 @@ from django.db import close_old_connections, transaction
 from django.db.models import F
 from django.utils import timezone
 
+from auditor import worker_lock
 from auditor.codex_views import _persist_execution_event, run_queued_codex_execution
 from auditor.models import Execution, ExecutionInteraction
 
@@ -48,10 +48,8 @@ class Command(BaseCommand):
         lock_path.parent.mkdir(parents=True, exist_ok=True)
 
         with lock_path.open("a+") as lock_file:
-            try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise CommandError("Já existe um worker local da Atena em execução.") from exc
+            if not worker_lock.try_acquire(lock_file):
+                raise CommandError("Já existe um worker local da Atena em execução.")
 
             recovered = self._recover_orphaned_worker_executions()
             if recovered:

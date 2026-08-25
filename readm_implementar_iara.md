@@ -381,3 +381,36 @@ O rollback deve poder ser feito sem apagar conversas ou artefatos:
 
 Essa separação permite homologar o IARA gradualmente, mantendo o Atena
 operacional durante todo o trabalho.
+
+## 15. Decisão de implementação (resultado da integração)
+
+**Cenário confirmado = A (passthrough Responses), não B.** O SDK `iaragenai`
+expõe a **Responses API nativa** em `client.responses` (além de
+`client.chat.completions`). O adaptador (`auditor/iara_adapter.py`) **repassa** o
+corpo Responses do Codex para `client.responses` e devolve o SSE do IARA
+**verbatim** — não traduz para Chat Completions.
+
+Por que passthrough é obrigatório: o Codex 0.147 opera em "code mode" e envia a
+ferramenta principal como `functions.exec` do tipo `custom` com
+`format: {type: "grammar"}` (Lark), dentro de um item `additional_tools` no
+`input`. Isso é nativo da Responses API e **não** tem representação em Chat
+Completions. Verificado empiricamente: desligar `code_mode`/`code_mode_only`/
+`code_mode_host` **não** remove a tool grammar. Logo, traduzir quebraria as
+ferramentas do Codex; o passthrough as preserva.
+
+**Requisito de rede (importante):** o SDK roteia `/responses` pelo gateway SSE
+(`base_url_sse` = `agent-gateway.{env}.aws.cloud.ihf`), host distinto do gateway
+padrão de chat.completions. Esse host precisa ser **alcançável** de onde o app
+roda. Alguns ambientes de dev (ex.: SageMaker) resolvem o gateway dataplane
+(chat.completions), mas **não** o `agent-gateway` de homol — nesses casos o
+Codex↔IARA só funciona no ambiente de deploy (rede Itaú/ECS). Confirme com:
+
+```
+python -m testes.iara.check_iara_responses_reachable
+```
+
+Estado dos testes: `testes/iara/test_iara_adapter.py` (tradução pura) e
+`testes/iara/test_iara_adapter_http.py` (passthrough HTTP/SSE com cliente falso)
+passam offline. `testes/iara/e2e_codex_iara.py` (texto) e
+`testes/iara/e2e_codex_iara_tools.py` (uso de ferramentas) provam o caminho
+Codex→adaptador→IARA quando o `/responses` é alcançável.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import fcntl
 import json
 import queue
 import re
@@ -24,6 +23,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
 
+from . import worker_lock
 from .codex_app_server import (
     CodexAppServer,
     CodexAppServerError,
@@ -267,11 +267,10 @@ def _local_worker_is_running() -> bool:
         return False
     try:
         with lock_path.open("a+") as lock_file:
-            try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
+            if not worker_lock.try_acquire(lock_file):
+                # A trava está presa por outro processo: o worker está vivo.
                 return True
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            worker_lock.release(lock_file)
             return False
     except OSError:
         # Em caso de dúvida não encerramos uma execução potencialmente válida.
