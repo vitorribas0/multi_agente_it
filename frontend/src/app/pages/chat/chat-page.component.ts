@@ -195,6 +195,8 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
   private activeExecutionId: string | null = null;
   private executionEventCursor = 0;
   private executionPollTimer: ReturnType<typeof setTimeout> | null = null;
+  private executionPollFailures = 0;
+  private readonly MAX_EXECUTION_POLL_FAILURES = 5;
   private shouldScroll = false;
   private followLatest = true;
   private lastMessagesScrollTop = 0;
@@ -252,6 +254,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.activeExecutionId = null;
     this.activeConversationId = null;
     this.executionEventCursor = 0;
+    this.executionPollFailures = 0;
     this.isLoading = false;
     this.stopRequested = false;
     this.conversationId = null;
@@ -378,6 +381,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.activeExecutionId = execution.id;
     this.activeConversationId = execution.conversation_id;
     this.executionEventCursor = 0;
+    this.executionPollFailures = 0;
     this.isLoading = this.executionIsActive(execution);
     this.typing = this.isLoading;
     this.stopRequested = execution.status === 'stopping';
@@ -461,6 +465,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.chat.getExecution(executionId).subscribe({
       next: ({ execution }) => {
         if (this.activeExecutionId !== executionId) return;
+        this.executionPollFailures = 0;
         this.consumeExecutionEvents(execution.events || []);
         this.livePlan = execution.plan || this.livePlan;
         this.livePlanExplanation = execution.plan_explanation || this.livePlanExplanation;
@@ -474,8 +479,38 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
           this.finishRecoveredExecution(execution);
         }
       },
-      error: () => this.scheduleExecutionPoll(2000),
+      error: () => {
+        this.executionPollFailures += 1;
+        if (this.executionPollFailures < this.MAX_EXECUTION_POLL_FAILURES) {
+          this.scheduleExecutionPoll(2000);
+          return;
+        }
+        this.failExecutionTracking(
+          'A conexão com o servidor foi perdida. Verifique se o Django está ativo e tente novamente.',
+        );
+      },
     });
+  }
+
+  private failExecutionTracking(message: string): void {
+    this.stopExecutionPolling();
+    this.activeExecutionId = null;
+    this.activeConversationId = null;
+    this.executionEventCursor = 0;
+    this.executionPollFailures = 0;
+    this.isLoading = false;
+    this.typing = false;
+    this.stopRequested = false;
+    this.pendingInteraction = null;
+    this.awaitingHuman = false;
+    this.controller = null;
+    this.finalizeLiveTree();
+    this.messages.push({
+      role: 'assistant',
+      content: `❌ Execução encerrada: ${message}`,
+      tool_calls: [],
+    });
+    this.scrollSoon(true);
   }
 
   private finishRecoveredExecution(execution: ExecutionSnapshot): void {
@@ -484,6 +519,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.activeExecutionId = null;
     this.activeConversationId = null;
     this.executionEventCursor = 0;
+    this.executionPollFailures = 0;
     this.isLoading = false;
     this.typing = false;
     this.stopRequested = false;
@@ -573,6 +609,7 @@ export class ChatPageComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.activeConversationId = this.conversationId;
     this.activeExecutionId = null;
     this.executionEventCursor = 0;
+    this.executionPollFailures = 0;
     this.stopRequested = false;
     this.input = '';
 

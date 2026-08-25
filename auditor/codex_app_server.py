@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,21 @@ _TRACE_ITEM_TYPES = {
 }
 
 _APPROVAL_POLICY = "untrusted"
+
+
+def _env_timeout(name: str, default: int, minimum: int) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+_STARTUP_TIMEOUT_SECONDS = _env_timeout(
+    "ATENA_CODEX_STARTUP_TIMEOUT_SECONDS", 30, 5
+)
+_TURN_IDLE_TIMEOUT_SECONDS = _env_timeout(
+    "ATENA_CODEX_IDLE_TIMEOUT_SECONDS", 300, 30
+)
 _SERVER_REQUEST_METHODS = {
     "item/tool/requestUserInput",
     "tool/requestUserInput",  # compatibilidade com versões anteriores
@@ -123,7 +139,10 @@ class CodexAppServer:
             env=process_env,
         )
         self._stderr: list[str] = []
+        self._stdout_messages: "queue.Queue[dict | object]" = queue.Queue()
+        self._stdout_closed = object()
         threading.Thread(target=self._drain_stderr, daemon=True).start()
+        threading.Thread(target=self._drain_stdout, daemon=True).start()
 
     def _ensure_runtime_link(self, name: str, target: Path) -> None:
         """Expõe dependências oficiais no workspace sem copiá-las ou alterá-las."""
@@ -149,6 +168,23 @@ class CodexAppServer:
             self._stderr.append(line.rstrip())
             if len(self._stderr) > 30:
                 self._stderr.pop(0)
+
+    def _drain_stdout(self) -> None:
+        """Lê o protocolo sem permitir que uma resposta ausente bloqueie para sempre."""
+        if not self.process.stdout:
+            self._stdout_messages.put(self._stdout_closed)
+            return
+        try:
+            for line in self.process.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    self._stdout_messages.put(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        finally:
+            self._stdout_messages.put(self._stdout_closed)
 
     def _send(self, payload: dict) -> None:
         with self._send_lock:
@@ -205,22 +241,26 @@ class CodexAppServer:
         self._interrupt_requested.set()
         return self._send_interrupt_if_ready()
 
-    def _messages(self) -> Iterator[dict]:
-        if not self.process.stdout:
-            raise CodexAppServerError("Canal de saída do Codex indisponível.")
-        for line in self.process.stdout:
-            line = line.strip()
-            if not line:
-                continue
+    def _messages(self, timeout_seconds: int | None = None) -> Iterator[dict]:
+        timeout_seconds = timeout_seconds or _TURN_IDLE_TIMEOUT_SECONDS
+        while True:
             try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                continue
-        detail = "\n".join(self._stderr[-5:])
-        raise CodexAppServerError(detail or "Codex App Server encerrou inesperadamente.")
+                message = self._stdout_messages.get(timeout=timeout_seconds)
+            except queue.Empty as exc:
+                raise CodexAppServerError(
+                    "A Atena não recebeu resposta do modelo dentro do tempo limite. "
+                    "Verifique a credencial OpenAI e a conexão de rede."
+                ) from exc
+            if message is self._stdout_closed:
+                detail = "\n".join(self._stderr[-5:])
+                raise CodexAppServerError(
+                    detail or "Codex App Server encerrou inesperadamente."
+                )
+            if isinstance(message, dict):
+                yield message
 
     def _wait_response(self, request_id: int) -> dict:
-        for message in self._messages():
+        for message in self._messages(_STARTUP_TIMEOUT_SECONDS):
             if message.get("id") != request_id:
                 continue
             if "error" in message:

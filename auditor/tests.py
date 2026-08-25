@@ -1,5 +1,7 @@
 import json
+import queue
 import threading
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -7,8 +9,9 @@ from unittest.mock import patch
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.utils import timezone
 
-from .codex_app_server import CodexAppServer
+from .codex_app_server import CodexAppServer, CodexAppServerError
 from .codex_views import (
     _CODEX_RUNTIME_ID,
     _ExecutionEventQueue,
@@ -65,6 +68,14 @@ class CodexAppServerEventTests(SimpleTestCase):
         client._interrupt_requested = threading.Event()
         client._interrupt_sent = threading.Event()
         return client
+
+    def test_missing_model_response_expires_instead_of_waiting_forever(self):
+        client = self._client()
+        client._stdout_messages = queue.Queue()
+        client._stdout_closed = object()
+
+        with self.assertRaisesRegex(CodexAppServerError, "tempo limite"):
+            next(client._messages(0.01))
 
     def test_streams_complete_activity_lifecycle_and_command_output(self):
         client = self._client()
@@ -318,6 +329,27 @@ class CodexInteractionEndpointTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["active_execution"]["id"], str(execution.id))
         self.assertEqual(response.json()["active_execution"]["status"], "waiting_user")
+
+    @patch("auditor.codex_views._WORKER_QUEUE_TIMEOUT_SECONDS", 5)
+    @patch("auditor.codex_views._local_worker_is_running", lambda: False)
+    def test_execution_status_fails_a_queue_that_no_worker_claimed(self):
+        conversation = Conversation.objects.create(title="Worker indisponível")
+        execution = Execution.objects.create(
+            conversation=conversation,
+            backend="local-worker",
+            status="queued",
+        )
+        Execution.objects.filter(pk=execution.pk).update(
+            created_at=timezone.now() - timedelta(seconds=6)
+        )
+
+        response = self.client.get(f"/api/codex/executions/{execution.id}/")
+
+        execution.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(execution.status, "failed")
+        self.assertIn("worker da Atena", execution.error)
+        self.assertEqual(response.json()["execution"]["status"], "failed")
 
     def test_database_rejects_two_active_executions_for_the_same_chat(self):
         conversation = Conversation.objects.create(title="Sem duplicidade")

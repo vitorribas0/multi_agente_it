@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import fcntl
 import json
 import queue
 import re
@@ -113,6 +114,9 @@ _PENDING_INTERACTIONS_LOCK = threading.Lock()
 _INTERACTION_TIMEOUT_SECONDS = 10 * 60
 _CODEX_FORCE_STOP_SECONDS = 2.0
 _EXECUTION_EVENT_LIMIT = 250
+_WORKER_QUEUE_TIMEOUT_SECONDS = max(
+    5, int(getattr(settings, "ATENA_WORKER_QUEUE_TIMEOUT_SECONDS", 20))
+)
 _CODEX_RUNTIME_ID = uuid4().hex
 
 
@@ -249,6 +253,50 @@ def _execution_public_payload(execution: Execution) -> dict:
         "created_at": execution.created_at.isoformat(),
         "updated_at": execution.updated_at.isoformat(),
     }
+
+
+def _local_worker_is_running() -> bool:
+    """Confirma pelo lock exclusivo se o worker local continua vivo."""
+    lock_path = Path(settings.BASE_DIR) / "runtime" / "agent-worker.lock"
+    if not lock_path.parent.is_dir():
+        return False
+    try:
+        with lock_path.open("a+") as lock_file:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            return False
+    except OSError:
+        # Em caso de dúvida não encerramos uma execução potencialmente válida.
+        return True
+
+
+def _expire_unclaimed_worker_execution(execution: Execution) -> bool:
+    """Encerra uma fila que nenhum worker assumiu dentro do limite local."""
+    if execution.backend != "local-worker" or execution.status != "queued":
+        return False
+    deadline = timezone.now() - timedelta(seconds=_WORKER_QUEUE_TIMEOUT_SECONDS)
+    if execution.created_at > deadline or _local_worker_is_running():
+        return False
+    message = (
+        "O worker da Atena não iniciou a execução. Inicie "
+        "'python manage.py run_agent_worker' e tente novamente."
+    )
+    changed = Execution.objects.filter(
+        pk=execution.pk,
+        backend="local-worker",
+        status="queued",
+        created_at__lte=deadline,
+    ).update(
+        status="failed",
+        error=message,
+        finished_at=timezone.now(),
+        last_heartbeat_at=timezone.now(),
+        updated_at=timezone.now(),
+    )
+    return bool(changed)
 
 
 def _recover_orphaned_local_executions(conversation_id: int | None = None) -> int:
@@ -1420,6 +1468,7 @@ def codex_execution_detail(_request, execution_id):
             status=404,
         )
     _recover_orphaned_local_executions(execution.conversation_id)
+    _expire_unclaimed_worker_execution(execution)
     execution.refresh_from_db()
     return JsonResponse({"status": "success", "execution": _execution_public_payload(execution)})
 
