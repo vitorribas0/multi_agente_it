@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 import os
 import queue
-import shutil
 import subprocess
 import sys
 import threading
+from hashlib import sha256
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -30,6 +30,11 @@ _TRACE_ITEM_TYPES = {
 }
 
 _APPROVAL_POLICY = "untrusted"
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_CODEX_HOME = _PROJECT_ROOT / "runtime" / "codex_home"
+_AUTH_FINGERPRINT_FILENAME = ".atena-openai-key.sha256"
+_DEFAULT_MODEL = "gpt-5.6-terra"
+_DEFAULT_REASONING_EFFORT = "medium"
 
 
 def _env_timeout(name: str, default: int, minimum: int) -> int:
@@ -58,6 +63,129 @@ class CodexAppServerError(RuntimeError):
     pass
 
 
+def _bundled_codex_runtime() -> tuple[Path, Path | None]:
+    """Resolve o runtime versionado instalado com o SDK oficial.
+
+    O pacote ``openai-codex`` depende de ``openai-codex-cli-bin`` na mesma
+    versão. Isso mantém o binário fora do Git, mas o torna uma dependência
+    reproduzível do projeto em vez de reutilizar o Codex do ChatGPT Desktop.
+    """
+    try:
+        from codex_cli_bin import bundled_codex_path, bundled_path_dir
+    except ImportError as exc:
+        raise CodexAppServerError(
+            "Runtime portátil do Codex não instalado. "
+            "Execute 'pip install -r requirements.txt'."
+        ) from exc
+
+    executable = Path(bundled_codex_path()).resolve()
+    if not executable.is_file():
+        raise CodexAppServerError(
+            "O pacote openai-codex está instalado, mas seu runtime não foi encontrado."
+        )
+    runtime_path = bundled_path_dir()
+    return executable, Path(runtime_path).resolve() if runtime_path else None
+
+
+def codex_runtime_available() -> bool:
+    """Indica se o runtime empacotado e uma autenticação possível existem."""
+    try:
+        _bundled_codex_runtime()
+    except CodexAppServerError:
+        return False
+    codex_home = _codex_home_path()
+    return bool(
+        os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("OPENAI_ADMIN_KEY")
+        or (codex_home / "auth.json").is_file()
+    )
+
+
+def _codex_home_path() -> Path:
+    configured = (os.environ.get("ATENA_CODEX_HOME") or "").strip()
+    if not configured:
+        return _DEFAULT_CODEX_HOME
+    path = Path(configured).expanduser()
+    return (path if path.is_absolute() else _PROJECT_ROOT / path).resolve()
+
+
+def _prepare_codex_home() -> Path:
+    codex_home = _codex_home_path()
+    codex_home.mkdir(parents=True, exist_ok=True)
+    try:
+        codex_home.chmod(0o700)
+    except OSError:
+        pass
+    return codex_home
+
+
+def _configured_model() -> str:
+    return (os.environ.get("ATENA_CODEX_MODEL") or _DEFAULT_MODEL).strip()
+
+
+def _configured_reasoning_effort() -> str:
+    configured = (
+        os.environ.get("ATENA_CODEX_REASONING_EFFORT")
+        or _DEFAULT_REASONING_EFFORT
+    ).strip().lower()
+    allowed = {"minimal", "low", "medium", "high", "xhigh"}
+    return configured if configured in allowed else _DEFAULT_REASONING_EFFORT
+
+
+def _ensure_api_key_auth(
+    executable: Path,
+    process_env: dict[str, str],
+    codex_home: Path,
+) -> None:
+    """Inicializa a autenticação própria da Atena sem reutilizar ``~/.codex``."""
+    auth_file = codex_home / "auth.json"
+    api_key = (
+        process_env.get("OPENAI_API_KEY")
+        or process_env.get("OPENAI_ADMIN_KEY")
+        or ""
+    ).strip()
+    if not api_key:
+        if auth_file.is_file():
+            return
+        raise CodexAppServerError(
+            "Credencial OpenAI ausente. Configure OPENAI_API_KEY no arquivo .env."
+        )
+
+    fingerprint = sha256(api_key.encode("utf-8")).hexdigest()
+    fingerprint_file = codex_home / _AUTH_FINGERPRINT_FILENAME
+    try:
+        cached_fingerprint = fingerprint_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        cached_fingerprint = ""
+    if auth_file.is_file() and cached_fingerprint == fingerprint:
+        return
+
+    try:
+        completed = subprocess.run(
+            [str(executable), "login", "--with-api-key"],
+            input=f"{api_key}\n",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=process_env,
+            timeout=_STARTUP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CodexAppServerError(
+            "Não foi possível inicializar a autenticação OpenAI da Atena."
+        ) from exc
+    if completed.returncode != 0 or not auth_file.is_file():
+        raise CodexAppServerError(
+            "A credencial OpenAI não pôde ser registrada pelo runtime da Atena."
+        )
+    try:
+        fingerprint_file.write_text(fingerprint, encoding="utf-8")
+        fingerprint_file.chmod(0o600)
+    except OSError:
+        pass
+
+
 _DEVELOPER_INSTRUCTIONS = (
     "Atue como assistente de auditoria. Responda em português do Brasil e use "
     "as skills do repositório quando forem pertinentes. O diretório de trabalho "
@@ -65,9 +193,9 @@ _DEVELOPER_INSTRUCTIONS = (
     "arquivo, crie de fato o arquivo final diretamente nesse diretório; a aplicação "
     "o publicará na pasta de saída da conversa, em vez "
     "de apenas mostrar código ou instruções. Você pode gerar XLSX, CSV, PDF e "
-    "HTML. Para planilhas, siga a skill Spreadsheets e use o @oai/artifact-tool; "
-    "o node_modules e o container_tools oficiais já estão disponíveis no diretório "
-    "atual. Não use openpyxl, xlsxwriter ou pandas.ExcelWriter. Não altere arquivos "
+    "HTML. Para planilhas, use as bibliotecas Python instaladas com o projeto, como "
+    "openpyxl, xlsxwriter ou pandas, e valide o arquivo antes de entregá-lo. Não "
+    "dependa de node_modules, container_tools ou arquivos fora deste projeto. Não altere arquivos "
     "fora do diretório atual. Os dados de entrada da sessão, quando existirem, "
     "podem ser localizados em ../manifesto_sessao.json e são somente leitura. "
     "Converse naturalmente em saudações e perguntas "
@@ -90,27 +218,8 @@ _DEVELOPER_INSTRUCTIONS = (
 
 class CodexAppServer:
     def __init__(self, cwd: Path):
-        executable = shutil.which("codex")
-        if not executable:
-            raise CodexAppServerError("Executável 'codex' não encontrado no PATH.")
+        executable, runtime_path = _bundled_codex_runtime()
         self.cwd = cwd.resolve()
-        runtime_root = (
-            Path.home() / ".cache" / "codex-runtimes" / "codex-primary-runtime"
-        )
-        dependencies = runtime_root / "dependencies"
-        node_bin = dependencies / "node" / "bin"
-        node_modules = dependencies / "node" / "node_modules"
-        bundled_python = dependencies / "python" / "bin" / "python3"
-        spreadsheet_tools = (
-            runtime_root
-            / "plugins"
-            / "openai-primary-runtime"
-            / "plugins"
-            / "spreadsheets"
-            / "skills"
-            / "spreadsheets"
-            / "container_tools"
-        )
         self._send_lock = threading.Lock()
         self._close_lock = threading.Lock()
         self._turn_lock = threading.Lock()
@@ -118,18 +227,19 @@ class CodexAppServer:
         self._active_turn_id: str | None = None
         self._interrupt_requested = threading.Event()
         self._interrupt_sent = threading.Event()
-        self._ensure_runtime_link("node_modules", node_modules)
-        self._ensure_runtime_link("container_tools", spreadsheet_tools)
         process_env = os.environ.copy()
-        if node_bin.is_dir():
-            process_env["PATH"] = f"{node_bin}{os.pathsep}{process_env.get('PATH', '')}"
-        if node_modules.is_dir():
-            process_env["NODE_PATH"] = str(node_modules)
-        process_env["AUDITOR_ARTIFACT_PYTHON"] = str(
-            bundled_python if bundled_python.is_file() else Path(sys.executable)
+        codex_home = _prepare_codex_home()
+        process_env["CODEX_HOME"] = str(codex_home)
+        path_entries = [str(Path(sys.executable).resolve().parent)]
+        if runtime_path and runtime_path.is_dir():
+            path_entries.insert(0, str(runtime_path))
+        process_env["PATH"] = os.pathsep.join(
+            [*path_entries, process_env.get("PATH", "")]
         )
+        process_env["ATENA_PYTHON_EXECUTABLE"] = str(Path(sys.executable).resolve())
+        _ensure_api_key_auth(executable, process_env, codex_home)
         self.process = subprocess.Popen(
-            [executable, "app-server", "--stdio"],
+            [str(executable), "app-server", "--listen", "stdio://"],
             cwd=str(self.cwd),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -143,23 +253,6 @@ class CodexAppServer:
         self._stdout_closed = object()
         threading.Thread(target=self._drain_stderr, daemon=True).start()
         threading.Thread(target=self._drain_stdout, daemon=True).start()
-
-    def _ensure_runtime_link(self, name: str, target: Path) -> None:
-        """Expõe dependências oficiais no workspace sem copiá-las ou alterá-las."""
-        if not target.is_dir():
-            return
-        link = self.cwd / name
-        if link.exists():
-            return
-        if link.is_symlink():
-            try:
-                link.unlink()
-            except OSError:
-                return
-        try:
-            link.symlink_to(target, target_is_directory=True)
-        except OSError:
-            pass
 
     def _drain_stderr(self) -> None:
         if not self.process.stderr:
@@ -295,6 +388,7 @@ class CodexAppServer:
                     "cwd": str(self.cwd),
                     "approvalPolicy": _APPROVAL_POLICY,
                     "sandbox": "workspace-write",
+                    "model": _configured_model(),
                     "config": {"features.default_mode_request_user_input": True},
                     "developerInstructions": _DEVELOPER_INSTRUCTIONS,
                 },
@@ -313,6 +407,7 @@ class CodexAppServer:
                 "cwd": str(self.cwd),
                 "approvalPolicy": _APPROVAL_POLICY,
                 "sandbox": "workspace-write",
+                "model": _configured_model(),
                 "config": {"features.default_mode_request_user_input": True},
                 "developerInstructions": _DEVELOPER_INSTRUCTIONS,
             },
@@ -342,6 +437,8 @@ class CodexAppServer:
                 "input": [{"type": "text", "text": prompt}],
                 "cwd": str(self.cwd),
                 "approvalPolicy": _APPROVAL_POLICY,
+                "model": _configured_model(),
+                "effort": _configured_reasoning_effort(),
                 "sandboxPolicy": {
                     "type": "workspaceWrite",
                     "writableRoots": [str(self.cwd)],

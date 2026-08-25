@@ -24,7 +24,11 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
 
-from .codex_app_server import CodexAppServer, CodexAppServerError
+from .codex_app_server import (
+    CodexAppServer,
+    CodexAppServerError,
+    codex_runtime_available,
+)
 from .models import Conversation, Execution, ExecutionInteraction, Message, ToolCall
 from .playbook_runtime import (
     normalize_execution_policy,
@@ -53,6 +57,7 @@ _MAX_GENERATED_ARTIFACT_BYTES = 200 * 1024 * 1024
 _MAX_GENERATED_ARTIFACTS_PER_TURN = 20
 _TRACE_TEXT_LIMIT = 6000
 _TRACE_RESULT_PREVIEW_LIMIT = 1200
+_CODEX_STORAGE_VERSION = "atena-portable-v1"
 _TRACE_META = {
     "commandExecution": ("codex_command", "⌨️"),
     "fileChange": ("codex_file_change", "📝"),
@@ -1443,11 +1448,10 @@ def _prompt_with_history(conv, text: str, has_codex_thread: bool) -> str:
 
 @require_GET
 def codex_status(_request):
-    from shutil import which
-
     return JsonResponse({
-        "status": "ready" if which("codex") else "unavailable",
+        "status": "ready" if codex_runtime_available() else "unavailable",
         "engine": "codex-app-server",
+        "runtime": "openai-codex-pinned",
         "sandbox": "workspace-write-isolado",
         "skills": [
             "auditoria-interna",
@@ -1597,7 +1601,15 @@ def codex_chat_stream(request):
                 status=400,
             )
         state = dict(conv.state or {})
-        old_thread_id = data.get("_old_thread_id") or state.get("codex_thread_id")
+        storage_version = data.get("_codex_storage_version") or state.get(
+            "codex_storage_version"
+        )
+        if storage_version == _CODEX_STORAGE_VERSION:
+            old_thread_id = data.get("_old_thread_id") or state.get(
+                "codex_thread_id"
+            )
+        else:
+            old_thread_id = None
         prompt = data.get("_prepared_prompt") or _prompt_with_history(
             conv, text, bool(old_thread_id)
         )
@@ -1662,13 +1674,18 @@ def codex_chat_stream(request):
             }, status=409)
 
         state = dict(conv.state or {})
-        old_thread_id = state.get("codex_thread_id")
+        old_thread_id = (
+            state.get("codex_thread_id")
+            if state.get("codex_storage_version") == _CODEX_STORAGE_VERSION
+            else None
+        )
         prompt = _prompt_with_history(conv, text, bool(old_thread_id))
         persisted_payload = {
             **data,
             "conversation_id": conv.id,
             "message": text,
             "_old_thread_id": old_thread_id,
+            "_codex_storage_version": _CODEX_STORAGE_VERSION,
             "_prepared_prompt": prompt,
             "_playbook_snapshot": playbook_snapshot,
         }
@@ -1822,6 +1839,7 @@ def codex_chat_stream(request):
                     last_heartbeat_at=timezone.now(),
                 )
                 state["codex_thread_id"] = thread_id
+                state["codex_storage_version"] = _CODEX_STORAGE_VERSION
                 state["chat_engine"] = "codex-app-server"
                 conv.state = state
                 conv.save(update_fields=["state", "updated_at"])

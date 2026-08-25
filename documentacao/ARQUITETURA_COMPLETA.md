@@ -11,7 +11,7 @@ flowchart LR
     A -->|/api| D[Django API :8000]
     D --> DB[(SQLite local)]
     W[Worker Atena] --> DB
-    W --> C[Codex App Server]
+    W --> C[Codex App Server versionado]
     C --> S[Sandbox do chat]
     S --> F[Entradas, saídas e evidências]
     A -. polling .-> D
@@ -89,6 +89,21 @@ reiniciar apenas a API não encerra o turno em execução.
 `auditor/codex_app_server.py` abre ou retoma a thread do agente, publica planos,
 atividades e solicitações de aprovação. Cada conversa trabalha em um diretório
 isolado e utiliza as skills de `.agents/skills/`.
+
+O runtime vem da dependência fixada `openai-codex`, que inclui a versão
+correspondente de `openai-codex-cli-bin`. O adaptador não procura executáveis no
+`PATH`, dentro do ChatGPT Desktop ou em `~/.cache/codex-runtimes`. A autenticação
+e o histórico interno ficam em `runtime/codex_home/`, ou no caminho definido por
+`ATENA_CODEX_HOME`; essa pasta nunca é versionada.
+
+No primeiro turno após esta migração, uma conversa que ainda aponte para um
+thread da instalação pessoal não tenta reutilizá-lo. O Atena abre um thread em
+seu armazenamento próprio e recompõe o contexto a partir das mensagens salvas
+na conversa.
+
+As planilhas e demais artefatos são gerados com as dependências Python do
+próprio projeto. O sandbox não recebe atalhos para plugins ou bibliotecas de uma
+instalação pessoal do Codex.
 
 O motor anterior em `auditor/ai_service.py` e `tools/` permanece como backend de
 compatibilidade para os endpoints legados de agente; ele não renderiza frontend.
@@ -185,6 +200,7 @@ alteradas pelo agente e saídas devem ser materializadas antes da resposta final
 | Artefatos | filesystem local | S3 |
 | Fila distribuída | tabela `Execution` | SQS + estado no PostgreSQL |
 | Segredos | `.env` local ignorado | Secrets Manager |
+| Estado do runtime Codex | `runtime/codex_home/` | volume persistente do worker |
 | Frontend | Angular dev server | build estático/CDN |
 
 As interfaces persistentes (`Execution`, eventos e interações) foram mantidas
@@ -200,6 +216,7 @@ auditor_project/             configuração Django
 .agents/skills/              skills da Atena
 tools/                       ferramentas do motor compatível
 runtime/codex_sessions/      dados locais por conversa (ignorado no Git)
+runtime/codex_home/          autenticação e threads do runtime (ignorado no Git)
 documentacao/                operação e arquitetura atuais
 ```
 

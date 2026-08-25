@@ -8,8 +8,8 @@ execução de tarefas de backend.
 
 - Python 3.11 ou superior.
 - Node.js 18 ou superior.
-- Codex CLI disponível no ambiente do worker.
-- Credenciais OpenAI/Iara e AWS somente para as funcionalidades que as utilizam.
+- `OPENAI_API_KEY` para o agente principal.
+- Credenciais Iara e AWS somente para as funcionalidades legadas que as utilizam.
 
 ## Instalação
 
@@ -22,8 +22,23 @@ npm install
 cd ..
 ```
 
+O `requirements.txt` instala `openai-codex` e seu runtime fixado. Não instale o
+Codex CLI ou o ChatGPT Desktop para executar a Atena: o worker utiliza somente
+a versão empacotada com o projeto.
+
 Copie `.env.example` para `.env`, preencha apenas as credenciais necessárias e
 nunca versione o arquivo resultante.
+
+```ini
+OPENAI_API_KEY=sk-...
+ATENA_CODEX_MODEL=gpt-5.6-terra
+ATENA_CODEX_REASONING_EFFORT=medium
+```
+
+O primeiro turno registra essa chave em `runtime/codex_home/auth.json`, com o
+diretório inteiro ignorado pelo Git. Quando a chave mudar, o Atena atualiza a
+autenticação automaticamente. Para escolher outro local persistente, configure
+`ATENA_CODEX_HOME`.
 
 ## Banco local
 
@@ -96,7 +111,7 @@ botão de parar.
 | Mensagem permanece na fila | worker desligado | iniciar `run_agent_worker` |
 | `ECONNREFUSED` no proxy | porta 8000 indisponível | verificar o processo Django |
 | `database is locked` recorrente | concorrência excessiva no SQLite | reiniciar API/worker; migrar para PostgreSQL |
-| Codex indisponível | CLI ou credencial ausente | executar `codex --version` e revisar `.env` |
+| Codex indisponível | SDK ou credencial ausente | reinstalar `requirements.txt` e revisar `OPENAI_API_KEY` |
 
 ## Produção
 
@@ -106,3 +121,5 @@ botão de parar.
 - PostgreSQL/RDS substitui SQLite.
 - S3 substitui o filesystem local dos chats.
 - Secrets Manager fornece credenciais; segredos nunca entram na imagem.
+- `ATENA_CODEX_HOME` deve apontar para um volume persistente do worker; ele não
+  é a pasta pessoal de nenhum usuário.

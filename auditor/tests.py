@@ -1,4 +1,5 @@
 import json
+import os
 import queue
 import threading
 from datetime import timedelta
@@ -11,9 +12,17 @@ from django.db import IntegrityError, transaction
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
-from .codex_app_server import CodexAppServer, CodexAppServerError
+from .codex_app_server import (
+    CodexAppServer,
+    CodexAppServerError,
+    _bundled_codex_runtime,
+    _codex_home_path,
+    _configured_model,
+    _configured_reasoning_effort,
+)
 from .codex_views import (
     _CODEX_RUNTIME_ID,
+    _CODEX_STORAGE_VERSION,
     _ExecutionEventQueue,
     _PENDING_INTERACTIONS,
     _PENDING_INTERACTIONS_LOCK,
@@ -55,6 +64,39 @@ class ApiOnlyBoundaryTests(TestCase):
     def test_admin_and_api_remain_available(self):
         self.assertEqual(self.client.get("/admin/").status_code, 302)
         self.assertEqual(self.client.get("/api/codex/status/").status_code, 200)
+
+
+class CodexPortableRuntimeTests(SimpleTestCase):
+    def test_runtime_comes_from_the_versioned_python_dependency(self):
+        executable, _runtime_path = _bundled_codex_runtime()
+
+        self.assertTrue(executable.is_file())
+        self.assertIn("codex_cli_bin", str(executable))
+        self.assertNotIn("ChatGPT.app", str(executable))
+
+    def test_relative_codex_home_is_owned_by_the_project(self):
+        with patch.dict(
+            os.environ,
+            {"ATENA_CODEX_HOME": "runtime/test-codex-home"},
+            clear=False,
+        ):
+            home = _codex_home_path()
+
+        self.assertTrue(home.is_absolute())
+        self.assertTrue(str(home).endswith("runtime/test-codex-home"))
+        self.assertNotIn("/.codex", str(home))
+
+    def test_model_and_reasoning_are_explicit_environment_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ATENA_CODEX_MODEL": "gpt-5.6-terra",
+                "ATENA_CODEX_REASONING_EFFORT": "high",
+            },
+            clear=False,
+        ):
+            self.assertEqual(_configured_model(), "gpt-5.6-terra")
+            self.assertEqual(_configured_reasoning_effort(), "high")
 
 
 class CodexAppServerEventTests(SimpleTestCase):
@@ -382,6 +424,10 @@ class CodexInteractionEndpointTests(TestCase):
             "Analise este conjunto de dados",
         )
         self.assertTrue(execution.request_payload["_prepared_prompt"])
+        self.assertEqual(
+            execution.request_payload["_codex_storage_version"],
+            _CODEX_STORAGE_VERSION,
+        )
         self.assertEqual(
             conversation.messages.filter(role="user").values_list("content", flat=True).get(),
             "Analise este conjunto de dados",

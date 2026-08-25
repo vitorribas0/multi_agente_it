@@ -5,9 +5,11 @@ Atena é uma aplicação de auditoria assistida por IA: um **backend Django**
 um **front Angular** (`frontend/`) que consome essa API.
 
 Codex é o runtime agente da Atena; OpenAI e Iara são provedores possíveis de
-LLM, não nomes da aplicação. O caminho Atena/Codex atual usa OpenAI. As
-integrações Iara existentes permanecem restritas ao motor legado e às tools que
-já dependiam delas. A decisão arquitetural está detalhada em
+LLM, não nomes da aplicação. O caminho Atena/Codex atual usa OpenAI. O runtime
+Codex é instalado de forma versionada por `requirements.txt`: a aplicação não
+depende do ChatGPT Desktop, de `~/.codex` nem de caches pessoais do computador.
+As integrações Iara existentes permanecem restritas ao motor legado e às tools
+que já dependiam delas. A decisão arquitetural está detalhada em
 [`documentacao/ARQUITETURA_COMPLETA.md`](documentacao/ARQUITETURA_COMPLETA.md).
 
 O Angular é a única interface da aplicação. Django opera como API, Admin e
@@ -28,7 +30,8 @@ e da arquitetura em [`documentacao/ARQUITETURA_COMPLETA.md`](documentacao/ARQUIT
 |---|---|
 | **Python** | 3.11 (Django 5.2.17) |
 | **Node.js** | 18+ com npm (Angular 17) |
-| **Credenciais IaraGenAI** | `client_id` + `client_secret` (gateway de LLM) |
+| **Credencial OpenAI** | `OPENAI_API_KEY` para o runtime agente da Atena |
+| **Credenciais IaraGenAI** | opcionais; somente integrações do motor legado |
 | **Credenciais AWS** | access key / secret / session token — para o Athena |
 | **CA bundle Itaú** | `arquivos_suporte/cacert.pem` — TLS atrás do proxy corporativo |
 
@@ -46,10 +49,9 @@ copy .env.example .env    # Windows
 Campos principais (detalhe completo em `documentacao/COMO_RODAR.md` §3):
 
 ```ini
-IARA_CLIENT_ID=seu_client_id
-IARA_CLIENT_SECRET=seu_client_secret
-IARA_ENVIRONMENT=homol
-IARA_MODEL=gpt-4o
+OPENAI_API_KEY=sk-...
+ATENA_CODEX_MODEL=gpt-5.6-terra
+ATENA_CODEX_REASONING_EFFORT=medium
 
 [759242759842_CONSUMER]
 aws_access_key_id=SEU_ACCESS_KEY
@@ -79,6 +81,9 @@ python manage.py migrate
 # 4. subir o servidor (deixe este terminal aberto)
 python manage.py runserver
 ```
+
+O `pip install` instala também o SDK `openai-codex` e seu runtime compatível.
+Não é necessário instalar o ChatGPT Desktop nem o Codex CLI separadamente.
 
 O backend fica em **http://localhost:8000** (a API responde em `/api/...`).
 
@@ -147,6 +152,7 @@ Abra **http://localhost:4200** no navegador.
 | Erro SSL/CA ao consultar Athena | CA bundle não encontrado | garantir `arquivos_suporte/cacert.pem` e as vars `*_CA_BUNDLE` |
 | `database is locked` recorrente | concorrência acima do adequado para SQLite | reiniciar API/worker; em produção usar PostgreSQL |
 | Mudanças não aparecem no navegador | cache do build | hard reload (`Ctrl+Shift+R`) |
+| Runtime Codex indisponível | SDK ou `OPENAI_API_KEY` ausente | reinstalar `requirements.txt` e revisar `.env` |
 
 ---
 
@@ -162,6 +168,8 @@ frontend/           app Angular (UI que consome a API)
 arquivos_suporte/   CA bundle, modelos de OCR, assets de apoio
 documentacao/       guias atuais de operação e arquitetura
 scripts/            utilitários (setup de modelos, etc.)
+runtime/codex_sessions/ dados locais por conversa (ignorado no Git)
+runtime/codex_home/  estado próprio do runtime da Atena (ignorado no Git)
 ```
 
 Para adicionar uma tool nova: crie **um** arquivo em `tools/` com o decorator
